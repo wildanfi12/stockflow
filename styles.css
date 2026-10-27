@@ -100,3 +100,8 @@
 .brand-mark{width:36px;height:36px}.brand-mark img{transform:scale(1.7)}.nav-group-label{padding-top:15px;margin-top:7px;border-top:1px solid #ffffff18}@media(max-width:650px){.nav-group-label{display:none}}
 
 .deployment-notice{margin:16px 38px 0;padding:11px 14px;border:1px solid #ecd28a;border-radius:6px;background:#fff9e7;color:#6f5b20;font-size:11px;line-height:1.5}.deployment-notice[hidden]{display:none}@media(max-width:1000px){.deployment-notice{margin-left:23px;margin-right:23px}}@media(max-width:650px){.deployment-notice{margin:12px 13px 0;font-size:10px}}
+
+
+/* Navigation icon polish */
+.nav{min-height:42px;gap:12px;padding:10px 13px;border-radius:8px;font-size:13px;line-height:1.35;transition:background .18s ease,color .18s ease,transform .18s ease}.nav-icon{width:20px!important;height:20px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 20px;color:currentColor;font-size:0!important;text-align:center}.nav-icon svg{display:block;width:18px;height:18px;overflow:visible}.nav:not(.active) .nav-icon{color:#aebdcc}.nav:hover{transform:translateX(2px)}.nav.active{font-weight:700}.nav-group-label{font-size:10px!important;letter-spacing:1.5px}.nav-group-label:not(.nav){padding-left:13px}
+@media(max-width:650px){.nav{justify-content:flex-start;padding:10px 11px}.nav:not(.active){font-size:13px}.nav span.nav-icon{font-size:0!important}}
