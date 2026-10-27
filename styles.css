@@ -9,3 +9,84 @@
 .edit-btn:hover{background:#edf2f7;color:var(--navy)}
 .ean-gen-btn{margin-top:4px;border:1px dashed #7a8c9e;background:#f5f8fa;border-radius:4px;padding:4px 8px;font-size:9px;cursor:pointer;color:#2c3e50}
 .ean-gen-btn:hover{background:#e7eff5}
+
+/* Cashier Chip & User switcher */
+.cashier-chip{display:flex;align-items:center;gap:6px;background:#f0f4f8;padding:6px 12px;border-radius:20px;font-size:11px;color:var(--navy);font-weight:600}
+.user:hover{background:#ffffff14;border-radius:6px}
+
+/* Sales Filter Bar */
+.sales-filter-bar{display:flex;flex-direction:column;gap:10px;padding:12px 18px;background:#fafbfc;border-bottom:1px solid var(--line)}
+.filter-group{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.quick-chips{display:flex;gap:4px}
+.chip-btn{border:1px solid var(--line);background:#fff;border-radius:15px;padding:4px 10px;font-size:10px;cursor:pointer;color:#576574}
+.chip-btn:hover{background:#edf2f7}
+.chip-btn.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+.search-input-field{height:32px;border:1px solid var(--line);border-radius:5px;padding:0 9px;font:11px Arial,sans-serif;min-width:180px}
+.toolbar-info{display:flex;justify-content:space-between;align-items:center;padding:10px 18px;border-bottom:1px solid var(--line);font-size:11px;color:#677482}
+.sales-grand-total{font-weight:700;color:var(--navy);font-size:12px}
+
+/* Badges */
+.status-badge{display:inline-block;padding:3px 8px;border-radius:12px;font-size:9px;font-weight:700;letter-spacing:.3px}
+.status-badge.paid{background:#e8f7ee;color:#18845b;border:1px solid #c2ebd5}
+.status-badge.pending{background:#fff8df;color:#9b7a00;border:1px solid #fae8a4}
+.status-badge.cancelled{background:#fff0ee;color:#c64d43;border:1px solid #f9cac5}
+.status-badge.done{background:#e8f7ee;color:#18845b;border:1px solid #c2ebd5}
+.status-badge.diff{background:#fff0ee;color:#c64d43;border:1px solid #f9cac5}
+
+/* Reconciliation Page */
+.recon-toolbar{display:flex;justify-content:space-between;align-items:center;background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 18px;margin-bottom:16px}
+.recon-date-picker{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#455463}
+.recon-date-picker input{height:34px;border:1px solid var(--line);border-radius:5px;padding:0 8px;font:11px Arial,sans-serif}
+.recon-status-badge{display:flex;align-items:center;gap:8px;font-size:11px;color:#6b7885}
+.recon-stats-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.table-foot-total{background:#f8f9fa;font-weight:bold;border-top:2px solid var(--line)}
+.closing-summary-body{padding:18px}
+.closing-summary-card{display:flex;flex-direction:column;gap:8px;font-size:11px}
+.closing-row{display:flex;justify-content:space-between;border-bottom:1px solid #f0f2f5;padding:6px 0}
+
+/* Penutupan Kasir Page */
+.closing-form-wrap{padding:18px}
+.closing-table-wrap{margin:16px 0}
+.closing-compare-table{width:100%}
+.closing-compare-table th{background:#f5f7fa;font-size:10px}
+.actual-input{width:130px;height:32px;border:1px solid var(--line);border-radius:4px;padding:0 7px;font:11px Arial,sans-serif;text-align:right}
+.diff-cell{font-weight:700}
+.diff-cell.zero{color:var(--green)}
+.diff-cell.warn{color:var(--red)}
+.variance-alert{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:6px;background:#fff2ef;border:1px solid #f8cdc8;margin:12px 0}
+.variance-alert b{font-size:11px;color:#ad281d}
+.variance-alert p{font-size:10px;color:#70534f;margin:3px 0 0}
+.notes-textarea{width:100%;height:65px;border:1px solid var(--line);border-radius:5px;padding:8px;font:11px Arial,sans-serif;resize:vertical}
+.check-box-label{display:flex;align-items:center;gap:8px;font-size:11px;color:#354452;cursor:pointer;background:#fafbfc;border:1px solid var(--line);padding:8px 12px;border-radius:5px}
+
+/* Invoice Professional Modal */
+.invoice-modal-content{background:#fff;border-radius:8px;width:min(680px,96vw);max-height:90vh;overflow-y:auto;box-shadow:0 15px 45px rgba(7,26,43,0.35)}
+.invoice-paper{padding:30px 35px;background:#fff;color:#182330;font-family:'DM Sans',Arial,sans-serif}
+.invoice-top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--navy);padding-bottom:16px;margin-bottom:16px}
+.inv-brand-box{display:flex;align-items:center;gap:10px}
+.inv-mark{width:34px;height:34px;border:2px solid var(--yellow);background:var(--navy);border-radius:8px;display:flex;align-items:center;justify-content:center;gap:2px}
+.inv-mark i{width:3px;height:18px;background:var(--yellow);border-radius:1px}
+.inv-company h2{margin:0;font:800 16px Manrope,Arial,sans-serif;letter-spacing:1px;color:var(--navy)}
+.inv-company p{margin:2px 0 0;font-size:10px;color:#6b7785}
+.inv-meta-right{text-align:right}
+.inv-title{font:800 20px Manrope,Arial,sans-serif;letter-spacing:1px;color:var(--navy);margin:0 0 5px}
+.inv-no{font-size:12px;font-weight:700;color:#2c3e50}
+.inv-details-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:12px 16px;font-size:11px;margin-bottom:18px}
+.inv-details-grid div{display:flex;flex-direction:column;gap:2px}
+.inv-details-grid small{color:#7c8793;font-size:9px;text-transform:uppercase;font-weight:600}
+.inv-details-grid b{color:#1a2530}
+.invoice-items-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:11px}
+.invoice-items-table th{background:#f1f4f8;padding:8px 6px;text-align:left;font-size:10px;letter-spacing:.5px;border-bottom:1px solid #d8e0e7}
+.invoice-items-table td{padding:8px 6px;border-bottom:1px solid #edf1f5}
+.inv-totals-box{margin-left:auto;width:280px;border-top:1px solid var(--line);padding-top:10px;font-size:11px}
+.inv-tot-line{display:flex;justify-content:space-between;padding:3px 0}
+.inv-tot-line.grand{font-size:15px;font-weight:800;border-top:2px solid var(--navy);margin-top:6px;padding-top:6px;color:var(--navy)}
+.inv-footer{margin-top:25px;border-top:1px dashed #d0d7de;padding-top:12px;font-size:10px;color:#7a8694;text-align:center}
+.inv-actions-footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding:16px 30px;background:#f5f7fa;border-top:1px solid var(--line);border-radius:0 0 8px 8px}
+.inv-btn-group{display:flex;gap:6px;flex-wrap:wrap}
+
+/* WhatsApp helper dialog */
+.wa-helper-card{background:#e7f8ee;border:1px solid #b5e9c9;border-radius:6px;padding:12px 16px;margin:12px 0;font-size:11px;color:#185a38}
+.wa-helper-card b{display:block;margin-bottom:4px}
+.wa-open-btn{background:#25d366!important;border-color:#25d366!important;color:#fff!important;font-weight:700}
+.wa-open-btn:hover{background:#1ebb5b!important}
