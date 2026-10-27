@@ -221,11 +221,27 @@ function modal(title, body, submitLabel, onSubmit) {
 /* ==================== POS / KASIR / SCAN ==================== */
 const cart = new Map();
 
+function roundedDiscountUnitPrice(originalPrice, discountRate) {
+  const price = BigInt(originalPrice);
+  if (!discountRate) return Number(price);
+  const discountedNumerator = price * BigInt(100 - discountRate);
+  const roundedThousands = (discountedNumerator + 99999n) / 100000n;
+  return Number(roundedThousands * 1000n);
+}
+
+function calculateSaleTotals(items, discountRate) {
+  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
+  const total = items.reduce((sum, item) => sum + item.quantity * roundedDiscountUnitPrice(item.unit_price, discountRate), 0);
+  if (!Number.isSafeInteger(subtotal) || !Number.isSafeInteger(total)) throw new Error('Total transaksi melebihi batas integer Rupiah yang didukung.');
+  return { subtotal, total, discount: subtotal - total };
+}
+
 function updateCartTotals() {
   const rows = [...cart.values()];
-  const subtotal = rows.reduce((n, x) => n + x.quantity * x.unit_price, 0);
-  const discount = Math.max(0, Number($('#saleDiscount')?.value || 0));
-  const total = Math.max(0, subtotal - discount);
+  const discountRate = Number($('#saleDiscountRate')?.value || 0);
+  let subtotal = 0, discount = 0, total = 0;
+  try { ({ subtotal, discount, total } = calculateSaleTotals(rows, discountRate)); }
+  catch (e) { notify(e.message); }
   const payment = $('#salePayment')?.value || 'Tunai';
   const cash = Number($('#saleCash')?.value || 0);
 
@@ -234,6 +250,7 @@ function updateCartTotals() {
     $('#cartDiscountDisp').textContent = '- ' + rupiah(discount);
     if ($('#discountRow')) $('#discountRow').style.display = discount > 0 ? 'flex' : 'none';
   }
+  if ($('#discountSummaryLabel')) $('#discountSummaryLabel').textContent = discountRate ? `Diskon ${discountRate}%:` : 'Diskon Transaksi:';
   if ($('#cartTotal')) $('#cartTotal').textContent = rupiah(total);
 
   const cashField = $('#cashField');
@@ -273,6 +290,7 @@ function renderCart() {
     $('#cartCount').textContent = rows.reduce((n, x) => n + x.quantity, 0) + ' unit · ' + rows.length + ' SKU';
   }
   if ($('#cartRows')) {
+    const discountRate = Number($('#saleDiscountRate')?.value || 0);
     $('#cartRows').innerHTML = rows.length ? rows.map(x => `
       <tr>
         <td>
@@ -287,9 +305,10 @@ function renderCart() {
         <td>
           <input class="cart-price" type="number" min="0" step="1000" data-price="${x.id}" value="${x.unit_price}" aria-label="Harga satuan ${esc(x.sku)}">
         </td>
-        <td><b>${rupiah(x.unit_price * x.quantity)}</b></td>
+        <td><b>${rupiah(roundedDiscountUnitPrice(x.unit_price, discountRate))}</b></td>
+        <td><b>${rupiah(roundedDiscountUnitPrice(x.unit_price, discountRate) * x.quantity)}</b></td>
         <td><button class="row-action" data-remove="${x.id}" aria-label="Hapus ${esc(x.sku)}">×</button></td>
-      </tr>`).join('') : '<tr><td colspan="5" class="empty-row">Scan barcode atau masukkan SKU untuk mulai transaksi.</td></tr>';
+      </tr>`).join('') : '<tr><td colspan="6" class="empty-row">Scan barcode atau masukkan SKU untuk mulai transaksi.</td></tr>';
   }
 
   $$('[data-qty]').forEach(b => b.onclick = () => {
@@ -321,7 +340,7 @@ function renderCart() {
 }
 
 $('#salePayment')?.addEventListener('change', updateCartTotals);
-$('#saleDiscount')?.addEventListener('input', updateCartTotals);
+$('#saleDiscountRate')?.addEventListener('change', renderCart);
 $('#saleCash')?.addEventListener('input', updateCartTotals);
 
 async function scan() {
@@ -373,6 +392,7 @@ async function scan() {
         <div class="result-details">
           <div><small>STOK TERSEDIA</small><b>${available} ${esc(p.unit)}</b></div>
           <div><small>HARGA SATUAN</small><b>${rupiah(cart.get(p.id).unit_price)}</b></div>
+          <div><small>HARGA SETELAH DISKON ${Number($('#saleDiscountRate')?.value || 0)}%</small><b>${rupiah(roundedDiscountUnitPrice(cart.get(p.id).unit_price, Number($('#saleDiscountRate')?.value || 0)))}</b></div>
           <div><small>JUMLAH DI KERANJANG</small><b>${cart.get(p.id).quantity} ${esc(p.unit)}</b></div>
           <div><small>LOKASI RAK</small><b>${esc(p.location || '—')}</b></div>
         </div>
@@ -403,9 +423,10 @@ $('#completeSale')?.addEventListener('click', async () => {
   const items = [...cart.values()];
   if (!items.length) return notify('Keranjang belanja masih kosong.');
 
-  const subtotal = items.reduce((n, x) => n + x.quantity * x.unit_price, 0);
-  const discount = Math.max(0, Number($('#saleDiscount')?.value || 0));
-  const total = Math.max(0, subtotal - discount);
+  const discountRate = Number($('#saleDiscountRate')?.value || 0);
+  let subtotal, discount, total;
+  try { ({ subtotal, discount, total } = calculateSaleTotals(items, discountRate)); }
+  catch (e) { return notify(e.message); }
   const paymentMethod = $('#salePayment').value;
   const cash = Number($('#saleCash')?.value || 0);
 
@@ -439,7 +460,7 @@ $('#completeSale')?.addEventListener('click', async () => {
         payment_method: paymentMethod,
         payment_status: paymentStatus,
         payment_ref: paymentRef,
-        discount,
+        discount_rate: discountRate,
         amount_paid: paymentMethod === 'Tunai' ? cash : total,
         change_amount: paymentMethod === 'Tunai' ? Math.max(0, cash - total) : 0,
         notes,
@@ -455,7 +476,7 @@ $('#completeSale')?.addEventListener('click', async () => {
     renderCart();
     if ($('#saleCustomer')) $('#saleCustomer').value = '';
     if ($('#salePhone')) $('#salePhone').value = '';
-    if ($('#saleDiscount')) $('#saleDiscount').value = '0';
+    if ($('#saleDiscountRate')) $('#saleDiscountRate').value = '0';
     if ($('#saleCash')) $('#saleCash').value = '';
     if ($('#salePaymentRef')) $('#salePaymentRef').value = '';
     if ($('#saleNotes')) $('#saleNotes').value = '';
@@ -479,7 +500,9 @@ function getPaymentStatusBadge(status) {
 
 function showInvoiceModal(s) {
   const host = $('#modalHost');
-  const itemsRows = (s.items || []).map((it, idx) => `
+  const itemsRows = (s.items || []).map((it, idx) => {
+    const sellPrice = Number(it.selling_unit_price || it.unit_price);
+    return `
     <tr>
       <td style="text-align:center">${idx + 1}</td>
       <td><b>${esc(it.sku)}</b></td>
@@ -487,9 +510,11 @@ function showInvoiceModal(s) {
       <td style="text-align:center">${esc(it.panjang || '—')}</td>
       <td style="text-align:center"><b>${it.quantity}</b></td>
       <td class="num">${rupiah(it.unit_price)}</td>
+      <td class="num">${rupiah(sellPrice)}</td>
       <td class="num"><b>${rupiah(it.line_total)}</b></td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   host.innerHTML = `
     <div class="modal-backdrop">
@@ -498,9 +523,7 @@ function showInvoiceModal(s) {
           <!-- Header -->
           <div class="invoice-top">
             <div class="inv-brand-box">
-              <div class="inv-mark">
-                <i></i><i style="height:12px"></i><i></i>
-              </div>
+              <img class="invoice-logo" src="/assets/howell-logo.png" alt="Logo Howell">
               <div class="inv-company">
                 <h2>HOWELL OFFICIAL STORE</h2>
                 <p>PT Howell Niaga Indonesia · Official Exhibition Store</p>
@@ -563,8 +586,9 @@ function showInvoiceModal(s) {
                 <th>NAMA BARANG</th>
                 <th style="width:65px;text-align:center">PANJANG</th>
                 <th style="width:50px;text-align:center">QTY</th>
-                <th class="num" style="width:105px">HARGA</th>
-                <th class="num" style="width:115px">SUBTOTAL</th>
+                <th class="num" style="width:95px">HARGA ASLI</th>
+                <th class="num" style="width:105px">HARGA JUAL / PCS</th>
+                <th class="num" style="width:115px">JUMLAH</th>
               </tr>
             </thead>
             <tbody>
@@ -580,7 +604,7 @@ function showInvoiceModal(s) {
             </div>
             ${s.discount > 0 ? `
               <div class="inv-tot-line" style="color:var(--red)">
-                <span>Diskon Transaksi:</span>
+                <span>${s.discount_rate ? `Diskon ${s.discount_rate}%:` : 'Diskon Transaksi:'}</span>
                 <b>- ${rupiah(s.discount)}</b>
               </div>
             ` : ''}
@@ -610,8 +634,8 @@ function showInvoiceModal(s) {
         <!-- WhatsApp Helper Notification (Hidden by default, shown upon WA share) -->
         <div id="waHelperBox" style="display:none;margin:0 30px">
           <div class="wa-helper-card">
-            <b>WhatsApp Berhasil Dibuka!</b>
-            Format pesan transaksi sudah disiapkan di tab WhatsApp. Untuk melampirkan berkas invoice asli, klik tombol <b>"Download PDF"</b> di samping lalu kirimkan berkas PDF yang terunduh kepada pelanggan.
+            <b>Untuk mengirim PDF lewat WhatsApp:</b>
+            Simpan PDF dari jendela cetak, lalu lampirkan file tersebut di chat. WhatsApp Web tidak mengizinkan situs melampirkan file secara otomatis. Pratinjau browser terbuka di komputer ini; tautan online untuk pelanggan memerlukan hosting publik.
           </div>
         </div>
 
@@ -619,7 +643,8 @@ function showInvoiceModal(s) {
         <div class="inv-actions-footer">
           <div class="inv-btn-group">
             <button class="button secondary" id="btnPreviewInvoice" title="Tampilkan tampilan penuh invoice">👁 <span>Preview</span></button>
-            <button class="button secondary wa-open-btn" id="btnShareWhatsApp" title="Kirim rincian invoice via WhatsApp">📱 <span>Share via WhatsApp</span></button>
+            <button class="button secondary" id="btnOpenInvoiceBrowser" title="Buka invoice di tab browser">🌐 <span>Buka di Browser</span></button>
+            <button class="button secondary wa-open-btn" id="btnShareWhatsApp" title="Simpan PDF dan siapkan chat WhatsApp">📱 <span>Siapkan PDF & WhatsApp</span></button>
           </div>
           <div class="inv-btn-group">
             <button class="button secondary" id="btnReprintInvoice" title="Cetak ulang struk / invoice">↻ <span>Cetak Ulang</span></button>
@@ -641,6 +666,7 @@ function showInvoiceModal(s) {
   $('#btnPrintInvoice').onclick = () => printInvoiceDocument(s, 'A4');
   $('#btnDownloadPdf').onclick = () => printInvoiceDocument(s, 'PDF');
   $('#btnReprintInvoice').onclick = () => printInvoiceDocument(s, 'A4');
+  $('#btnOpenInvoiceBrowser').onclick = () => printInvoiceDocument(s, 'A4', false);
 
   $('#btnPreviewInvoice').onclick = () => {
     const paper = $('#invoicePaperArea');
@@ -666,49 +692,23 @@ function shareInvoiceWhatsApp(s) {
     }
   }
 
-  const itemsText = (s.items || []).map((it, idx) =>
-    `${idx + 1}. ${it.name}${it.panjang ? ` (${it.panjang})` : ''} [${it.sku}] - ${it.quantity}x @ ${rupiah(it.unit_price)} = ${rupiah(it.line_total)}`
-  ).join('\n');
-
-  const message = [
-    `*HOWELL OFFICIAL STORE*`,
-    `PT Howell Niaga Indonesia`,
-    ``,
-    `Halo *${s.customer_name || 'Pelanggan'}*, terima kasih telah berbelanja di official booth Howell!`,
-    ``,
-    `Berikut rincian transaksi pembelian Anda:`,
-    `📄 *No. Invoice:* ${s.invoice_no}`,
-    `📅 *Tanggal:* ${timeFmt(s.sold_at)} WIB`,
-    `👤 *Kasir:* ${s.cashier_name || s.user_name || 'Admin'}`,
-    `💳 *Metode Bayar:* ${s.payment_method}`,
-    `📌 *Status Pembayaran:* ${s.payment_status}`,
-    s.payment_ref ? `🔑 *Ref/Approval:* ${s.payment_ref}` : '',
-    ``,
-    `*DAFTAR BARANG:*`,
-    itemsText,
-    `━━━━━━━━━━━━━━━━━━━━`,
-    `Subtotal: ${rupiah(s.subtotal)}`,
-    s.discount > 0 ? `Diskon: - ${rupiah(s.discount)}` : '',
-    `*TOTAL PEMBAYARAN: ${rupiah(s.total)}*`,
-    `━━━━━━━━━━━━━━━━━━━━`,
-    s.payment_method === 'Tunai' ? `Tunai Diterima: ${rupiah(s.amount_paid || s.total)}\nKembalian: ${rupiah(s.change_amount || 0)}\n` : '',
-    `Simpan bukti invoice ini untuk klaim garansi resmi Howell.`,
-    `Untuk berkas PDF lengkap, staf kasir kami dapat mengirimkannya melalui chat ini.`
-  ].filter(line => line !== '').join('\n');
-
+  const message = `Halo ${s.customer_name || 'Pelanggan'}, berikut invoice Howell ${s.invoice_no}. PDF invoice akan saya lampirkan di chat ini.`;
+  printInvoiceDocument(s, 'PDF');
   const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
   window.open(waUrl, '_blank');
 
   const helperBox = $('#waHelperBox');
   if (helperBox) helperBox.style.display = 'block';
-  notify('Jendela WhatsApp telah dibuka.');
+  notify('Simpan PDF dari jendela cetak, lalu lampirkan file tersebut di WhatsApp.');
 }
 
-function printInvoiceDocument(s, mode = 'A4') {
+function printInvoiceDocument(s, mode = 'A4', autoPrint = true) {
   const w = window.open('', '_blank');
   if (!w) return notify('Izinkan pop-up browser untuk mencetak / menyimpan PDF invoice.');
 
-  const itemsRows = (s.items || []).map((it, idx) => `
+  const itemsRows = (s.items || []).map((it, idx) => {
+    const sellPrice = Number(it.selling_unit_price || it.unit_price);
+    return `
     <tr>
       <td style="text-align:center">${idx + 1}</td>
       <td><b>${esc(it.sku)}</b></td>
@@ -716,9 +716,11 @@ function printInvoiceDocument(s, mode = 'A4') {
       <td style="text-align:center">${esc(it.panjang || '—')}</td>
       <td style="text-align:center"><b>${it.quantity}</b></td>
       <td class="num">${rupiah(it.unit_price)}</td>
+      <td class="num">${rupiah(sellPrice)}</td>
       <td class="num"><b>${rupiah(it.line_total)}</b></td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   const docTitle = `Invoice-${s.invoice_no}`;
 
@@ -733,6 +735,7 @@ function printInvoiceDocument(s, mode = 'A4') {
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #182330; margin: 0; padding: 20px; font-size: 11px; }
   .inv-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #071a2b; padding-bottom: 14px; margin-bottom: 14px; }
   .inv-brand { display: flex; align-items: center; gap: 10px; }
+  .inv-logo { width: 155px; height: 58px; object-fit: cover; object-position: center; }
   .inv-mark { width: 32px; height: 32px; background: #071a2b; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 2px; }
   .inv-mark i { width: 3px; height: 16px; background: #f5c518; border-radius: 1px; }
   .inv-comp h2 { margin: 0; font-size: 16px; font-weight: 800; color: #071a2b; letter-spacing: 0.5px; }
@@ -773,7 +776,7 @@ function printInvoiceDocument(s, mode = 'A4') {
 
   <div class="inv-header">
     <div class="inv-brand">
-      <div class="inv-mark"><i></i><i style="height:10px"></i><i></i></div>
+      <img class="inv-logo" src="${window.location.origin}/assets/howell-logo.png" alt="Logo Howell">
       <div class="inv-comp">
         <h2>HOWELL OFFICIAL STORE</h2>
         <p>PT Howell Niaga Indonesia · Exhibition Store</p>
@@ -821,8 +824,9 @@ function printInvoiceDocument(s, mode = 'A4') {
         <th>NAMA BARANG</th>
         <th style="width:70px;text-align:center">PANJANG</th>
         <th style="width:50px;text-align:center">QTY</th>
-        <th class="num" style="width:110px">HARGA</th>
-        <th class="num" style="width:120px">SUBTOTAL</th>
+        <th class="num" style="width:100px">HARGA ASLI</th>
+        <th class="num" style="width:110px">HARGA JUAL / PCS</th>
+        <th class="num" style="width:120px">JUMLAH</th>
       </tr>
     </thead>
     <tbody>
@@ -838,7 +842,7 @@ function printInvoiceDocument(s, mode = 'A4') {
       </div>
       ${s.discount > 0 ? `
         <div class="tot-line" style="color:#c53030">
-          <span>Diskon:</span>
+          <span>${s.discount_rate ? `Diskon ${s.discount_rate}%:` : 'Diskon:'}</span>
           <b>- ${rupiah(s.discount)}</b>
         </div>
       ` : ''}
@@ -866,7 +870,8 @@ function printInvoiceDocument(s, mode = 'A4') {
 </html>`);
   w.document.close();
   w.focus();
-  setTimeout(() => w.print(), 350);
+  if (autoPrint) setTimeout(() => w.print(), 350);
+  return w;
 }
 
 /* ==================== RIWAYAT PENJUALAN ==================== */
@@ -1698,27 +1703,62 @@ async function loadDashboard() {
 }
 
 /* ==================== PRODUK & SKU ==================== */
+let currentExhibitionSourcePromise;
+function currentExhibitionSkuSet() {
+  if (!currentExhibitionSourcePromise) {
+    currentExhibitionSourcePromise = api('/data/current-exhibition-source.json')
+      .then(source => {
+        // Older running server instances JSON-serialize static file Buffers.
+        if (source?.type === 'Buffer' && Array.isArray(source.data)) {
+          source = JSON.parse(new TextDecoder().decode(new Uint8Array(source.data)));
+        }
+        if (!Array.isArray(source?.products)) throw new Error('Data Excel Pameran tidak dapat dibaca. Muat ulang aplikasi setelah server diperbarui.');
+        const products = new Map((source.products || []).map(p => [String(p.sku).trim(), p]));
+        return { products, skus: new Set(products.keys()) };
+      })
+      .catch(error => { currentExhibitionSourcePromise = null; throw error; });
+  }
+  return currentExhibitionSourcePromise;
+}
+
 async function loadProducts(q = '') {
   try {
-    const rows = await api('/api/products?q=' + encodeURIComponent(q));
-    if ($('#productCount')) $('#productCount').textContent = rows.length + ' produk';
+    const [source, catalogRows] = await Promise.all([
+      currentExhibitionSkuSet(),
+      api('/api/products?q=' + encodeURIComponent(q))
+    ]);
+    const allRows = catalogRows.map(p => ({
+      ...p,
+      in_latest_exhibition: source.skus.has(String(p.sku).trim()),
+      latest_exhibition_source: source.products.get(String(p.sku).trim()) || null
+    }));
+    const scope = $('#productScope')?.value || 'all';
+    const pameranCount = allRows.filter(p => p.in_latest_exhibition).length;
+    const catalogCount = allRows.length - pameranCount;
+    const rows = allRows.filter(p => scope === 'pameran' ? p.in_latest_exhibition : scope === 'catalog' ? !p.in_latest_exhibition : true);
+    if ($('#productCount')) $('#productCount').textContent = `${rows.length} produk`;
+    if ($('#productDataNote')) {
+      const missingBarcode = rows.filter(p => !p.barcode).length;
+      $('#productDataNote').textContent = `${pameranCount} SKU dari Excel Pameran · ${catalogCount} SKU katalog lainnya${missingBarcode ? ` · ${missingBarcode} SKU belum memiliki barcode di katalog` : ''}. Stok operasional adalah saldo berjalan; QTY Excel hanya nilai sumber dan tidak menimpa penjualan.`;
+    }
     if ($('#productRows')) {
       $('#productRows').innerHTML = rows.length ? rows.map(p => `
         <tr>
           <td><div class="product-cell">${productCard(p)}</div></td>
           <td><b>${esc(p.sku)}</b></td>
           <td>${esc(p.barcode || '—')}</td>
-          <td>${p.source_qty == null ? `${p.stock} ${esc(p.unit)}` : `Stok ${p.stock} ${esc(p.unit)}<br>${quantity(p.source_qty, p.stock_verification_status === 'NEEDS_VERIFICATION')}<small class="sub-label">QTY sumber Excel</small>`}</td>
-          <td>${sourceMoney(p.source_unit_price)}</td>
-          <td>${sourceMoney(p.source_total)}</td>
-          <td>${sourceMoney(p.source_discount_value)}</td>
+          <td>${esc(p.panjang || '—')}</td>
+          <td><div class="stock-stack"><div class="stock-operational"><small>Operasional</small><b>${Number(p.stock).toLocaleString('id-ID')} ${esc(p.unit)}</b></div>${!p.in_latest_exhibition ? '<small class="sub-label">Di luar Excel terbaru</small>' : `<div class="stock-source"><small>QTY Excel</small>${quantity(p.latest_exhibition_source.source_qty, p.stock_verification_status === 'NEEDS_VERIFICATION' || p.stock_verification_status === 'MANUAL_REVIEW')}</div><small>${statusChip(p.stock_verification_status)}</small>`}</div></td>
+          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_unit_price) : '<span class="muted">—</span>'}</td>
+          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_total) : '<span class="muted">—</span>'}</td>
+          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_discount_value) : '<span class="muted">—</span>'}</td>
           <td>
             <div class="row-actions-group">
               <button class="edit-btn" title="Edit produk" data-edit="${p.id}">Edit</button>
               <button class="row-action" title="Arsipkan produk" data-archive="${p.id}">×</button>
             </div>
           </td>
-        </tr>`).join('') : '<tr><td colspan="8" class="empty-row">Belum ada produk sesuai pencarian.</td></tr>';
+        </tr>`).join('') : '<tr><td colspan="9" class="empty-row">Belum ada produk sesuai filter.</td></tr>';
     }
 
     $$('[data-edit]').forEach(b => b.onclick = () => showEditProductModal(b.dataset.edit));
@@ -1735,6 +1775,7 @@ async function loadProducts(q = '') {
 }
 
 $('#productSearch')?.addEventListener('input', e => loadProducts(e.target.value));
+$('#productScope')?.addEventListener('change', () => loadProducts($('#productSearch')?.value || ''));
 $('#exportProducts')?.addEventListener('click', () => {
   const q = $('#productSearch')?.value || '';
   window.open('/api/products/export' + (q ? '?q=' + encodeURIComponent(q) : ''), '_blank');

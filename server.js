@@ -1,6 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomBytes } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const root = __dirname;
@@ -119,7 +120,7 @@ CREATE TABLE IF NOT EXISTS sales (
 CREATE TABLE IF NOT EXISTS sale_items (
  id INTEGER PRIMARY KEY, sale_id INTEGER NOT NULL REFERENCES sales(id), product_id INTEGER NOT NULL REFERENCES products(id),
  sku TEXT NOT NULL, name TEXT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity>0), unit_price INTEGER NOT NULL CHECK(unit_price>=0),
- line_total INTEGER NOT NULL CHECK(line_total>=0), balance_after INTEGER NOT NULL CHECK(balance_after>=0));
+ selling_unit_price INTEGER NOT NULL DEFAULT 0 CHECK(selling_unit_price>=0), line_total INTEGER NOT NULL CHECK(line_total>=0), balance_after INTEGER NOT NULL CHECK(balance_after>=0));
 CREATE TABLE IF NOT EXISTS payments (
  id INTEGER PRIMARY KEY, sale_id INTEGER NOT NULL REFERENCES sales(id), payment_method TEXT NOT NULL,
  amount_due INTEGER NOT NULL CHECK(amount_due >= 0), amount_paid INTEGER NOT NULL CHECK(amount_paid >= 0),
@@ -137,6 +138,9 @@ CREATE TABLE IF NOT EXISTS cashier_closings (
  status TEXT NOT NULL DEFAULT 'SELESAI', notes TEXT NOT NULL DEFAULT '',
  reconciled_by TEXT NOT NULL DEFAULT 'Admin Howell', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 `);
+
+const saleItemCols = new Set(db.prepare('PRAGMA table_info(sale_items)').all().map(c => c.name));
+if (!saleItemCols.has('selling_unit_price')) db.exec('ALTER TABLE sale_items ADD COLUMN selling_unit_price INTEGER NOT NULL DEFAULT 0');
 
 // Check and add missing columns on sales
 const sCols = new Set(db.prepare('PRAGMA table_info(sales)').all().map(c => c.name));
@@ -166,6 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_movements_product_date ON inventory_movements(pro
 CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sold_at);
 CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_id);
 CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(payment_status, transaction_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_share_token ON sales(share_token) WHERE share_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id);
 CREATE INDEX IF NOT EXISTS idx_closings_date ON cashier_closings(closing_date);
 `);
@@ -177,7 +182,8 @@ const send = (res, status, body, type = 'application/json; charset=utf-8') => {
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'no-store'
   });
-  res.end(type.startsWith('application/json') ? JSON.stringify(body) : body);
+  const payload = type.startsWith('application/json') && !Buffer.isBuffer(body) ? JSON.stringify(body) : body;
+  res.end(payload);
 };
 
 const readBody = req => new Promise((resolve, reject) => {
@@ -421,8 +427,13 @@ const server = http.createServer(async (req, res) => {
           if (!Number.isSafeInteger(subtotal)) throw new Error('Total nilai transaksi melebihi kapasitas yang didukung.');
           const discountRate = Number(data.discount_rate || 0);
           if (![0, 20, 25].includes(discountRate)) throw new Error('Pilih diskon 0%, 20%, atau 25%.');
-          const discount = Number((BigInt(subtotal) * BigInt(discountRate)) / 100n);
-          const total = Math.max(0, subtotal - discount);
+          for (const x of prepared) {
+            const price = BigInt(x.price);
+            x.sellingPrice = discountRate === 0 ? x.price : Number((((price * BigInt(100 - discountRate)) + 99999n) / 100000n) * 1000n);
+            x.netLine = x.sellingPrice * x.qty;
+          }
+          const total = prepared.reduce((sum, x) => sum + x.netLine, 0);
+          const discount = subtotal - total;
           if (!Number.isSafeInteger(discount) || !Number.isSafeInteger(total)) throw new Error('Total atau diskon melebihi kapasitas integer Rupiah yang didukung.');
 
           let amountPaid = Number(data.amount_paid || 0);
@@ -457,8 +468,8 @@ const server = http.createServer(async (req, res) => {
 
           // Insert sale items & deduct stock atomik
           const itemInsert = db.prepare(`
-            INSERT INTO sale_items (sale_id, product_id, sku, name, quantity, unit_price, line_total, balance_after)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sale_items (sale_id, product_id, sku, name, quantity, unit_price, selling_unit_price, line_total, balance_after)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           const updateStock = db.prepare(`UPDATE products SET stock=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`);
           const moveInsert = db.prepare(`
@@ -469,7 +480,7 @@ const server = http.createServer(async (req, res) => {
           for (const x of prepared) {
             const balance = x.p.stock - x.qty;
             updateStock.run(balance, x.p.id);
-            itemInsert.run(saleId, x.p.id, x.p.sku, x.p.name, x.qty, x.price, x.line, balance);
+            itemInsert.run(saleId, x.p.id, x.p.sku, x.p.name, x.qty, x.price, x.sellingPrice, x.netLine, balance);
             moveInsert.run(x.p.id, x.qty, balance, invoice, `Penjualan kasir ${invoice} (${cashierName})`, x.p.stock_location || 'Pameran', cashierName);
           }
 

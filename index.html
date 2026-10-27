@@ -4,23 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Howell StockFlow — Inventory, POS & Rekonsiliasi</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=sidebar-polish1">
 </head>
 <body>
 <aside class="sidebar">
   <div class="brand">
-    <div class="brand-mark"><i></i><i></i><i></i></div>
+    <div class="brand-mark"><img src="/assets/howell-symbol.png" alt="Logo Howell"></div>
     <div><b>HOWELL</b><span>STOCKFLOW</span></div>
   </div>
-  <div class="workspace-label">WORKSPACE</div>
+  <div class="workspace-label">OPERASIONAL</div>
   <nav>
     <button class="nav active" data-page="dashboard"><span>▦</span>Dashboard</button>
     <button class="nav" data-page="scan"><span>⌗</span>Transaksi Kasir</button>
     <button class="nav" data-page="sales"><span>Rp</span>Riwayat & Invoice</button>
     <button class="nav" data-page="reconciliation"><span>⚖</span>Rekonsiliasi Harian</button>
     <button class="nav" data-page="closing"><span>☑</span>Penutupan Kasir</button>
+    <div class="workspace-label nav-group-label">INVENTARIS</div>
     <button class="nav" data-page="products"><span>▤</span>Produk & SKU</button>
-    <button class="nav" data-page="import"><span>⇧</span>Import Excel</button>
     <button class="nav" data-page="verification"><span>!</span>Perlu verifikasi</button>
     <button class="nav" data-page="movements"><span>⇄</span>Pergerakan stok</button>
   </nav>
@@ -167,10 +167,10 @@
         <div class="cart-table-wrap">
           <table>
             <thead>
-              <tr><th>PRODUK / SKU</th><th>QTY</th><th>HARGA / PCS</th><th>SUBTOTAL</th><th></th></tr>
+              <tr><th>PRODUK / SKU</th><th>QTY</th><th>HARGA ASLI / PCS</th><th>HARGA SETELAH DISKON / PCS</th><th>JUMLAH</th><th></th></tr>
             </thead>
             <tbody id="cartRows">
-              <tr><td colspan="5" class="empty-row">Scan produk untuk memulai transaksi.</td></tr>
+              <tr><td colspan="6" class="empty-row">Scan produk untuk memulai transaksi.</td></tr>
             </tbody>
           </table>
         </div>
@@ -198,8 +198,12 @@
             </select>
           </label>
           <label class="field">
-            <span>Diskon Transaksi (Rp)</span>
-            <input id="saleDiscount" type="number" min="0" step="1000" value="0" placeholder="0">
+            <span>Diskon dari Harga Asli *</span>
+            <select id="saleDiscountRate">
+              <option value="0">Tanpa diskon</option>
+              <option value="20">Diskon 20%</option>
+              <option value="25">Diskon 25%</option>
+            </select>
           </label>
 
           <!-- Cash specific fields -->
@@ -229,7 +233,7 @@
         <div class="cart-summary">
           <div class="summary-row"><span>Subtotal:</span><span id="cartSubtotal">Rp 0</span></div>
           <div class="summary-row" id="discountRow" style="display:none;color:var(--red)">
-            <span>Diskon Transaksi:</span><span id="cartDiscountDisp">-Rp 0</span>
+            <span id="discountSummaryLabel">Diskon Transaksi:</span><span id="cartDiscountDisp">-Rp 0</span>
           </div>
           <div class="cart-total">
             <span>Total Tagihan</span>
@@ -595,9 +599,10 @@
       <div>
         <div class="eyebrow">KATALOG INVENTARIS</div>
         <h1>Produk & SKU</h1>
-        <p>Katalog resmi Howell lengkap dengan Barcode EAN-13 dan spesifikasi Panjang.</p>
+        <p>Data produk per SKU dari workbook pameran. Saldo operasional dan QTY sumber ditampilkan terpisah.</p>
       </div>
       <div class="header-btns">
+        <button class="button secondary" data-page="import">⇧ <span>Impor Excel</span></button>
         <button class="button secondary" id="exportProducts">⤓ <span>Ekspor CSV</span></button>
         <button class="button primary" data-action="add-product">＋ <span>Tambah produk</span></button>
       </div>
@@ -609,26 +614,34 @@
           <input id="productSearch" placeholder="Cari nama, SKU, atau barcode...">
         </div>
         <div class="toolbar-right">
+          <select id="productScope" class="filter-select" aria-label="Filter cakupan produk">
+            <option value="all">Semua SKU</option>
+            <option value="pameran">SKU di Excel Pameran</option>
+            <option value="catalog">SKU katalog lainnya</option>
+          </select>
           <span class="result-count" id="productCount">0 produk</span>
         </div>
       </div>
+      <div class="product-source-note" id="productDataNote"></div>
       <div class="table-wrap">
-        <table>
+        <table class="products-table">
           <thead>
             <tr>
               <th>PRODUK</th>
               <th>SKU</th>
               <th>BARCODE</th>
               <th>PANJANG</th>
-              <th>STOK OPERASIONAL</th>
-              <th>HARGA SUMBER</th>
-              <th>STATUS VERIFIKASI</th>
+              <th>STOK</th>
+              <th>HARGA</th>
+              <th>TOTAL</th>
+              <th>DISC 25%</th>
               <th>AKSI</th>
             </tr>
           </thead>
           <tbody id="productRows"></tbody>
         </table>
       </div>
+      <div class="table-foot">Harga, TOTAL, dan DISC 25% mengikuti nilai sumber per SKU. QTY Excel adalah referensi saat impor; stok operasional menunjukkan saldo berjalan setelah pergerakan dan penjualan.</div>
     </section>
   </section>
 
@@ -769,6 +782,6 @@
 <div id="modalHost"></div>
 <div id="toast" class="toast"></div>
 
-<script src="/app-v2.js?v=20261027-v3"></script>
+<script src="/app-v2.js?v=20261027-invoice-share1"></script>
 </body>
 </html>
