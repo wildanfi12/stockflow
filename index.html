@@ -14,15 +14,15 @@
   </div>
   <div class="workspace-label">OPERASIONAL</div>
   <nav>
-    <button class="nav active" data-page="dashboard"><span>▦</span>Dashboard</button>
-    <button class="nav" data-page="scan"><span>⌗</span>Transaksi Kasir</button>
-    <button class="nav" data-page="sales"><span>Rp</span>Riwayat & Invoice</button>
-    <button class="nav" data-page="reconciliation"><span>⚖</span>Rekonsiliasi Harian</button>
-    <button class="nav" data-page="closing"><span>☑</span>Penutupan Kasir</button>
+    <button class="nav active" data-page="dashboard"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2"/></svg></span>Dashboard</button>
+    <button class="nav" data-page="scan"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3 6 21M18 3l-2 18M3 9h18M2 15h18"/></svg></span>Transaksi Kasir</button>
+    <button class="nav" data-page="sales"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V4h6a4 4 0 0 1 0 8H5m5 0 7 8"/></svg></span>Riwayat Penjualan</button>
+    <button class="nav" data-page="reconciliation"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M7 7h10M5 20h14M7 7l-4 8h8L7 7Zm10 0-4 8h8l-4-8Z"/></svg></span>Rekonsiliasi Harian</button>
+    <button class="nav" data-page="closing"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 2.5 2.5L16.5 9"/></svg></span>Penutupan Kasir</button>
     <div class="workspace-label nav-group-label">INVENTARIS</div>
-    <button class="nav" data-page="products"><span>▤</span>Produk & SKU</button>
-    <button class="nav" data-page="verification"><span>!</span>Perlu verifikasi</button>
-    <button class="nav" data-page="movements"><span>⇄</span>Pergerakan stok</button>
+    <button class="nav" data-page="products"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg></span>Produk & SKU</button>
+    <button class="nav" data-page="verification"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 21 20H3L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg></span>Perlu Verifikasi Stok</button>
+    <button class="nav" data-page="movements"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h15l-3-3m4 11H5l3 3"/></svg></span>Pergerakan stok</button>
   </nav>
   <div class="sidebar-bottom">
     <div class="warehouse">
@@ -56,7 +56,7 @@
   </header>
 
   <div class="deployment-notice" id="staticHostNotice" role="status" hidden>
-    GitHub Pages menampilkan pratinjau antarmuka saja. Data, kasir, dan stok memerlukan backend Node.js + SQLite yang saat ini berjalan di komputer lokal.
+    Mode pratinjau: tampilan tersedia, tetapi data operasional memerlukan backend dan database yang sudah di-deploy.
   </div>
 
   <!-- ==================== DASHBOARD PAGE ==================== -->
