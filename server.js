@@ -25,9 +25,12 @@ CREATE TABLE IF NOT EXISTS users (
 const userCount = db.prepare('SELECT count(*) c FROM users').get().c;
 if (userCount === 0) {
   const insertUser = db.prepare('INSERT INTO users (id, username, name, role) VALUES (?, ?, ?, ?)');
-  insertUser.run(1, 'admin', 'Admin Howell', 'admin');
-  insertUser.run(2, 'kasir1', 'Siti Aminah (Kasir 1)', 'kasir');
-  insertUser.run(3, 'kasir2', 'Budi Santoso (Kasir 2)', 'kasir');
+  insertUser.run(1, 'admin', 'Admin', 'admin');
+  insertUser.run(2, 'faiz', 'Faiz', 'kasir');
+} else {
+  db.prepare("UPDATE users SET username='admin', name='Admin', role='admin', active=1 WHERE id=1").run();
+  db.prepare("UPDATE users SET username='faiz', name='Faiz', role='kasir', active=1 WHERE id=2").run();
+  db.prepare("UPDATE users SET active=0 WHERE id NOT IN (1,2)").run();
 }
 
 // 2. Products Table
@@ -109,7 +112,7 @@ CREATE TABLE IF NOT EXISTS sales (
  customer_name TEXT NOT NULL DEFAULT 'Pelanggan', customer_phone TEXT NOT NULL DEFAULT '',
  payment_method TEXT NOT NULL DEFAULT 'Tunai', payment_status TEXT NOT NULL DEFAULT 'LUNAS',
  transaction_status TEXT NOT NULL DEFAULT 'COMPLETED', payment_ref TEXT NOT NULL DEFAULT '',
- subtotal INTEGER NOT NULL CHECK(subtotal>=0), discount INTEGER NOT NULL DEFAULT 0 CHECK(discount>=0), total INTEGER NOT NULL CHECK(total>=0),
+ subtotal INTEGER NOT NULL CHECK(subtotal>=0), discount INTEGER NOT NULL DEFAULT 0 CHECK(discount>=0), discount_rate INTEGER NOT NULL DEFAULT 0 CHECK(discount_rate IN (0,20,25)), total INTEGER NOT NULL CHECK(total>=0),
  amount_paid INTEGER NOT NULL DEFAULT 0, change_amount INTEGER NOT NULL DEFAULT 0,
  cashier_id INTEGER NOT NULL DEFAULT 1, cashier_name TEXT NOT NULL DEFAULT 'Admin Howell',
  notes TEXT NOT NULL DEFAULT '', user_name TEXT NOT NULL DEFAULT 'Admin Howell', location TEXT NOT NULL DEFAULT 'Pameran');
@@ -147,7 +150,8 @@ const salesAddCols = {
   cashier_id: 'INTEGER NOT NULL DEFAULT 1',
   cashier_name: "TEXT NOT NULL DEFAULT 'Admin Howell'",
   notes: "TEXT NOT NULL DEFAULT ''",
-  updated_at: "TEXT NOT NULL DEFAULT ''"
+  updated_at: "TEXT NOT NULL DEFAULT ''",
+  discount_rate: 'INTEGER NOT NULL DEFAULT 0'
 };
 for (const [col, type] of Object.entries(salesAddCols)) {
   if (!sCols.has(col)) db.exec(`ALTER TABLE sales ADD COLUMN ${col} ${type};`);
@@ -251,6 +255,12 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && url.pathname === '/api/users') {
         const users = db.prepare('SELECT id, username, name, role, active FROM users WHERE active=1 ORDER BY id').all();
         return send(res, 200, users);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/assets/howell-logo.png') {
+        const logo = path.join(root, 'assets', 'howell-logo.png');
+        if (!fs.existsSync(logo)) return send(res, 404, 'Logo tidak ditemukan.', 'text/plain; charset=utf-8');
+        return send(res, 200, fs.readFileSync(logo), 'image/png');
       }
 
       // ==================== SALES EXPORT ====================
@@ -409,8 +419,11 @@ const server = http.createServer(async (req, res) => {
 
           const subtotal = prepared.reduce((n, x) => n + x.line, 0);
           if (!Number.isSafeInteger(subtotal)) throw new Error('Total nilai transaksi melebihi kapasitas yang didukung.');
-          const discount = Math.max(0, Number(data.discount || 0));
+          const discountRate = Number(data.discount_rate || 0);
+          if (![0, 20, 25].includes(discountRate)) throw new Error('Pilih diskon 0%, 20%, atau 25%.');
+          const discount = Number((BigInt(subtotal) * BigInt(discountRate)) / 100n);
           const total = Math.max(0, subtotal - discount);
+          if (!Number.isSafeInteger(discount) || !Number.isSafeInteger(total)) throw new Error('Total atau diskon melebihi kapasitas integer Rupiah yang didukung.');
 
           let amountPaid = Number(data.amount_paid || 0);
           let changeAmount = Number(data.change_amount || 0);
@@ -430,14 +443,14 @@ const server = http.createServer(async (req, res) => {
           const saleInsert = db.prepare(`
             INSERT INTO sales (
               invoice_no, customer_name, customer_phone, payment_method, payment_status,
-              transaction_status, payment_ref, subtotal, discount, total, amount_paid,
+              transaction_status, payment_ref, subtotal, discount, discount_rate, total, amount_paid,
               change_amount, cashier_id, cashier_name, notes, user_name, location
-            ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pameran')
+            ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pameran')
           `);
 
           const saleRes = saleInsert.run(
             invoice, customerName, customerPhone, paymentMethod, paymentStatus,
-            paymentRef, subtotal, discount, total, amountPaid,
+            paymentRef, subtotal, discount, discountRate, total, amountPaid,
             changeAmount, cashierId, cashierName, notes, cashierName
           );
           const saleId = Number(saleRes.lastInsertRowid);
@@ -1097,5 +1110,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const port = Number(process.env.PORT || 3000);
-server.listen(port, '127.0.0.1', () => console.log(`Howell StockFlow berjalan di http://127.0.0.1:${port}`));
+process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
+process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
+
+const port = Number(process.env.PORT || 3001);
+server.listen(port, () => console.log(`Howell StockFlow berjalan di http://127.0.0.1:${port}`));
