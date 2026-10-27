@@ -1021,7 +1021,7 @@ async function loadSales() {
         </div>
         <div class="field full">
           <label>Alasan Koreksi Kasir (Audit Trail) *</label>
-          <input name="reason" required placeholder="Contoh: Kasir lupa mengganti shift saat melayani">
+          <input name="reason" required placeholder="Catatan alasan">
         </div>
       `, 'Simpan Koreksi', async d => {
         await api(`/api/sales/${id}/correct-cashier`, {
@@ -1790,7 +1790,7 @@ $('#exportProducts')?.addEventListener('click', () => {
 function showAddProductModal() {
   modal('Tambah Produk Baru', `
     <div class="form-grid">
-      <div class="field"><label>SKU *</label><input name="sku" required placeholder="Contoh: AU1208"></div>
+      <div class="field"><label>SKU *</label><input name="sku" required ></div>
       <div class="field">
         <label>Barcode EAN-13</label>
         <div style="display:flex;gap:4px">
@@ -1798,9 +1798,9 @@ function showAddProductModal() {
           <button type="button" class="button secondary" style="height:35px;padding:0 8px;font-size:10px;white-space:nowrap" id="btnGenEan">Auto EAN</button>
         </div>
       </div>
-      <div class="field full"><label>Nama Produk *</label><input name="name" required placeholder="Nama produk lengkap"></div>
-      <div class="field"><label>Panjang (Opsional)</label><input name="panjang" placeholder="Contoh: 1.5m, 3m"></div>
-      <div class="field"><label>Kategori</label><input name="category" placeholder="Audio, Adapter, dsb"></div>
+      <div class="field full"><label>Nama Produk *</label><input name="name" required ></div>
+      <div class="field"><label>Panjang (Opsional)</label><input name="panjang" ></div>
+      <div class="field"><label>Kategori</label><input name="category" ></div>
       <div class="field"><label>Satuan</label><select name="unit"><option>pcs</option><option>box</option><option>roll</option><option>set</option></select></div>
       <div class="field"><label>Harga Referensi (Rp)</label><input name="reference_price" type="number" min="0" value="0"></div>
       <div class="field"><label>Harga Jual (Rp)</label><input name="sale_price" type="number" min="0" value="0"></div>
@@ -1889,7 +1889,7 @@ async function showNewStockModal() {
         </div>
         <div class="field">
           <label>Nomor Referensi</label>
-          <input name="reference" placeholder="PO, Surat Jalan, dsb">
+          <input name="reference" placeholder="Referensi">
         </div>
         <div class="field">
           <label>Catatan</label>
