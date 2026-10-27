@@ -98,3 +98,5 @@
 .brand-mark{height:29px;width:29px;border:0;border-radius:0;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:none}.brand-mark img{width:100%;height:100%;display:block;object-fit:contain;object-position:center}
 
 .brand-mark{width:36px;height:36px}.brand-mark img{transform:scale(1.7)}.nav-group-label{padding-top:15px;margin-top:7px;border-top:1px solid #ffffff18}@media(max-width:650px){.nav-group-label{display:none}}
+
+.deployment-notice{margin:16px 38px 0;padding:11px 14px;border:1px solid #ecd28a;border-radius:6px;background:#fff9e7;color:#6f5b20;font-size:11px;line-height:1.5}.deployment-notice[hidden]{display:none}@media(max-width:1000px){.deployment-notice{margin-left:23px;margin-right:23px}}@media(max-width:650px){.deployment-notice{margin:12px 13px 0;font-size:10px}}
