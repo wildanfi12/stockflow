@@ -2,6 +2,12 @@
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const rupiah = n => 'Rp\u00a0' + Number(n || 0).toLocaleString('id-ID');
+const APP_BASE_PATH = window.location.pathname.replace(/\/+$/, '').replace(/\/index\.html$/i, '');
+const appUrl = path => `${APP_BASE_PATH}/${String(path).replace(/^\/+/, '')}`;
+if (window.location.hostname.endsWith('github.io')) {
+  const notice = $('#staticHostNotice');
+  if (notice) notice.hidden = false;
+}
 
 function timeFmt(s) {
   if (!s) return '—';
@@ -32,7 +38,7 @@ function normalizePhone(raw) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await fetch(url.startsWith('/') ? appUrl(url) : url, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
   });
@@ -523,7 +529,7 @@ function showInvoiceModal(s) {
           <!-- Header -->
           <div class="invoice-top">
             <div class="inv-brand-box">
-              <img class="invoice-logo" src="/assets/howell-logo.png" alt="Logo Howell">
+              <img class="invoice-logo" src="${appUrl('/assets/howell-logo.png')}" alt="Logo Howell">
               <div class="inv-company">
                 <h2>HOWELL OFFICIAL STORE</h2>
                 <p>PT Howell Niaga Indonesia · Official Exhibition Store</p>
@@ -776,7 +782,7 @@ function printInvoiceDocument(s, mode = 'A4', autoPrint = true) {
 
   <div class="inv-header">
     <div class="inv-brand">
-      <img class="inv-logo" src="${window.location.origin}/assets/howell-logo.png" alt="Logo Howell">
+      <img class="inv-logo" src="${window.location.origin}${appUrl('/assets/howell-logo.png')}" alt="Logo Howell">
       <div class="inv-comp">
         <h2>HOWELL OFFICIAL STORE</h2>
         <p>PT Howell Niaga Indonesia · Exhibition Store</p>
@@ -1074,7 +1080,7 @@ $('#exportSales')?.addEventListener('click', () => {
     payment_status: $('#salesStatusFilter')?.value || '',
     q: $('#salesSearch')?.value || ''
   });
-  window.open('/api/sales/export?' + qs.toString(), '_blank');
+  window.open(appUrl('/api/sales/export?' + qs.toString()), '_blank');
 });
 
 $('#printSalesHistory')?.addEventListener('click', () => {
@@ -1334,7 +1340,7 @@ $('#reconYesterday')?.addEventListener('click', () => {
 
 $('#exportReconCsv')?.addEventListener('click', () => {
   const date = $('#reconDate')?.value || dateWib();
-  window.open(`/api/reconciliation/export?date=${encodeURIComponent(date)}`, '_blank');
+  window.open(appUrl(`/api/reconciliation/export?date=${encodeURIComponent(date)}`), '_blank');
 });
 
 $('#btnCetakRekapHarian')?.addEventListener('click', () => {
@@ -1778,7 +1784,7 @@ $('#productSearch')?.addEventListener('input', e => loadProducts(e.target.value)
 $('#productScope')?.addEventListener('change', () => loadProducts($('#productSearch')?.value || ''));
 $('#exportProducts')?.addEventListener('click', () => {
   const q = $('#productSearch')?.value || '';
-  window.open('/api/products/export' + (q ? '?q=' + encodeURIComponent(q) : ''), '_blank');
+  window.open(appUrl('/api/products/export' + (q ? '?q=' + encodeURIComponent(q) : '')), '_blank');
 });
 
 function showAddProductModal() {
