@@ -223,6 +223,13 @@ function modal(title, body, submitLabel, onSubmit) {
 /* ==================== POS / KASIR / SCAN ==================== */
 const cart = new Map();
 let saleSubmissionInProgress = false;
+let pendingSaleRequest = null;
+
+function createSaleRequestKey() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return [...window.crypto.getRandomValues(new Uint8Array(16))]
+    .map(value => value.toString(16).padStart(2, '0')).join('');
+}
 
 function roundedDiscountUnitPrice(originalPrice, discountRate) {
   const price = BigInt(originalPrice);
@@ -236,7 +243,9 @@ function calculateSaleTotals(items, discountRate) {
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0);
   const total = items.reduce((sum, item) => sum + item.quantity * roundedDiscountUnitPrice(item.unit_price, discountRate), 0);
   if (!Number.isSafeInteger(subtotal) || !Number.isSafeInteger(total)) throw new Error('Total transaksi melebihi batas integer Rupiah yang didukung.');
-  return { subtotal, total, discount: subtotal - total };
+  const discount = subtotal - total;
+  if (discount < 0) throw new Error('Harga produk terlalu rendah untuk diskon setelah pembulatan ke atas. Periksa harga atau pilih tanpa diskon.');
+  return { subtotal, total, discount };
 }
 
 function updateCartTotals() {
@@ -434,6 +443,9 @@ $('#completeSale')?.addEventListener('click', async () => {
   const paymentMethod = $('#salePayment').value;
   const cash = Number($('#saleCash')?.value || 0);
 
+  if (paymentMethod === 'Tunai' && !Number.isSafeInteger(cash)) {
+    return notify('Nominal uang tunai harus berupa Rupiah bulat.');
+  }
   if (paymentMethod === 'Tunai' && cash < total) {
     return notify(`Nominal tunai diterima (${rupiah(cash)}) kurang dari total tagihan (${rupiah(total)}).`);
   }
@@ -455,6 +467,25 @@ $('#completeSale')?.addEventListener('click', async () => {
 
   if (!confirm(confirmMsg)) return;
 
+  const salePayload = {
+    items: items.map(x => ({ product_id: x.id, quantity: x.quantity, unit_price: x.unit_price })),
+    customer_name: customerName,
+    customer_phone: customerPhone,
+    payment_method: paymentMethod,
+    payment_status: paymentStatus,
+    payment_ref: paymentRef,
+    discount_rate: discountRate,
+    amount_paid: paymentMethod === 'Tunai' ? cash : (paymentStatus === 'LUNAS' ? total : 0),
+    change_amount: paymentMethod === 'Tunai' ? Math.max(0, cash - total) : 0,
+    notes,
+    cashier_id: selectedCashier.id,
+    user_name: selectedCashier.name
+  };
+  const payloadSignature = JSON.stringify(salePayload);
+  if (!pendingSaleRequest || pendingSaleRequest.signature !== payloadSignature) {
+    pendingSaleRequest = { signature: payloadSignature, key: createSaleRequestKey() };
+  }
+
   saleSubmissionInProgress = true;
   const submitButton = $('#completeSale');
   if (submitButton) {
@@ -464,25 +495,14 @@ $('#completeSale')?.addEventListener('click', async () => {
   try {
     const created = await api('/api/sales', {
       method: 'POST',
-      body: JSON.stringify({
-        items: items.map(x => ({ product_id: x.id, quantity: x.quantity, unit_price: x.unit_price })),
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        payment_method: paymentMethod,
-        payment_status: paymentStatus,
-        payment_ref: paymentRef,
-        discount_rate: discountRate,
-        amount_paid: paymentMethod === 'Tunai' ? cash : total,
-        change_amount: paymentMethod === 'Tunai' ? Math.max(0, cash - total) : 0,
-        notes,
-        cashier_id: selectedCashier.id,
-        user_name: selectedCashier.name
-      })
+      headers: { 'Idempotency-Key': pendingSaleRequest.key },
+      body: JSON.stringify(salePayload)
     });
 
     const sale = await api('/api/sales/' + created.id);
 
     // Reset Form
+    pendingSaleRequest = null;
     cart.clear();
     renderCart();
     if ($('#saleCustomer')) $('#saleCustomer').value = '';
@@ -1336,12 +1356,16 @@ $('#btnSaveClosing')?.addEventListener('click', async () => {
   const cashierId = Number($('#closeCashierSelect')?.value || activeCashier.id);
   const selectedCashier = allUsers.find(u => u.id === cashierId) || allUsers[0];
   if (!selectedCashier) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
-  const openingCash = Math.max(0, Number($('#closeOpeningCash')?.value || 0));
+  const openingCash = Number($('#closeOpeningCash')?.value || 0);
 
   const actCash = Number($('#actCash')?.value || 0);
   const actQris = Number($('#actQris')?.value || 0);
   const actDebit = Number($('#actDebit')?.value || 0);
   const actCredit = Number($('#actCredit')?.value || 0);
+
+  if (![openingCash, actCash, actQris, actDebit, actCredit].every(value => Number.isSafeInteger(value) && value >= 0)) {
+    return notify('Semua nominal penutupan harus berupa Rupiah bulat nol atau lebih.');
+  }
 
   const totalActual = actCash + actQris + actDebit + actCredit;
   const totalDiff = totalActual - systemClosingTotals.total;

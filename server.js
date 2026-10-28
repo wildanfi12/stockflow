@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, createHash } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const root = __dirname;
@@ -175,6 +175,13 @@ const salesAddCols = {
 for (const [col, type] of Object.entries(salesAddCols)) {
   if (!sCols.has(col)) db.exec(`ALTER TABLE sales ADD COLUMN ${col} ${type};`);
 }
+
+db.exec(`CREATE TABLE IF NOT EXISTS sale_idempotency (
+ request_key TEXT PRIMARY KEY,
+ payload_hash TEXT NOT NULL,
+ response_json TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`);
 
 // Indexes
 db.exec(`
@@ -677,16 +684,37 @@ const server = http.createServer(async (req, res) => {
         const cashierName = userObj.name;
 
         // Payment status & verification
-        let paymentStatus = String(data.payment_status || 'LUNAS').trim().toUpperCase();
+        const paymentStatus = String(data.payment_status || 'LUNAS').trim().toUpperCase();
         if (!['LUNAS', 'MENUNGGU_PEMBAYARAN'].includes(paymentStatus)) {
-          paymentStatus = 'LUNAS';
+          return send(res, 400, { error: 'Status pembayaran tidak valid.' });
         }
+        if (paymentMethod === 'Tunai' && paymentStatus !== 'LUNAS') {
+          return send(res, 400, { error: 'Transaksi tunai harus berstatus LUNAS.' });
+        }
+
+        const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
+        if (idempotencyKey && !/^[A-Za-z0-9_-]{16,64}$/.test(idempotencyKey)) {
+          return send(res, 400, { error: 'Kunci transaksi tidak valid. Silakan muat ulang dan coba kembali.' });
+        }
+        const payloadHash = idempotencyKey
+          ? createHash('sha256').update(JSON.stringify(data)).digest('hex')
+          : null;
 
         const paymentRef = String(data.payment_ref || '').trim();
         const notes = String(data.notes || '').trim();
 
         db.exec('BEGIN IMMEDIATE');
         try {
+          if (idempotencyKey) {
+            const previous = db.prepare('SELECT payload_hash,response_json FROM sale_idempotency WHERE request_key=?').get(idempotencyKey);
+            if (previous) {
+              if (previous.payload_hash !== payloadHash) throw new Error('Kunci transaksi ini sudah dipakai untuk isi keranjang berbeda. Mulai transaksi baru.');
+              const response = JSON.parse(previous.response_json);
+              db.exec('COMMIT');
+              return send(res, 201, response);
+            }
+          }
+
           const prepared = [];
           for (const item of items) {
             const id = Number(item.product_id), qty = Number(item.quantity), price = Number(item.unit_price);
@@ -722,18 +750,20 @@ const server = http.createServer(async (req, res) => {
           }
           const total = prepared.reduce((sum, x) => sum + x.netLine, 0);
           const discount = subtotal - total;
-          if (!Number.isSafeInteger(discount) || !Number.isSafeInteger(total)) throw new Error('Total atau diskon melebihi kapasitas integer Rupiah yang didukung.');
+          if (!Number.isSafeInteger(discount) || discount < 0 || !Number.isSafeInteger(total)) {
+            throw new Error('Total transaksi tidak valid. Periksa harga dan pembulatan diskon produk.');
+          }
 
-          let amountPaid = Number(data.amount_paid || 0);
-          let changeAmount = Number(data.change_amount || 0);
+          let amountPaid = 0;
+          let changeAmount = 0;
           if (paymentMethod === 'Tunai') {
-            if (paymentStatus === 'LUNAS') {
-              if (amountPaid < total) amountPaid = total;
-              changeAmount = Math.max(0, amountPaid - total);
+            amountPaid = Number(data.amount_paid ?? 0);
+            if (!Number.isSafeInteger(amountPaid) || amountPaid < total) {
+              throw new Error('Nominal uang tunai harus berupa Rupiah bulat dan minimal sebesar total tagihan.');
             }
+            changeAmount = amountPaid - total;
           } else {
-            amountPaid = total;
-            changeAmount = 0;
+            amountPaid = paymentStatus === 'LUNAS' ? total : 0;
           }
 
           const now = new Date();
@@ -796,8 +826,14 @@ const server = http.createServer(async (req, res) => {
             item_count: prepared.length
           }));
 
+          const response = { id: saleId, invoice_no: invoice, payment_status: paymentStatus, total };
+          if (idempotencyKey) {
+            db.prepare('INSERT INTO sale_idempotency(request_key,payload_hash,response_json) VALUES(?,?,?)')
+              .run(idempotencyKey, payloadHash, JSON.stringify(response));
+          }
+
           db.exec('COMMIT');
-          return send(res, 201, { id: saleId, invoice_no: invoice, payment_status: paymentStatus, total });
+          return send(res, 201, response);
         } catch (e) {
           db.exec('ROLLBACK');
           return send(res, 409, { error: e.message || 'Transaksi gagal disimpan.' });
@@ -819,8 +855,8 @@ const server = http.createServer(async (req, res) => {
           if (sale.transaction_status === 'CANCELLED') throw new Error('Transaksi sudah dibatalkan; pembayaran tidak dapat dikonfirmasi.');
           if (sale.payment_status === 'LUNAS') throw new Error('Pembayaran transaksi ini sudah berstatus LUNAS.');
 
-          db.prepare(`UPDATE sales SET payment_status='LUNAS', payment_ref=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(ref || sale.payment_ref, id);
-          db.prepare(`UPDATE payments SET payment_status='LUNAS', payment_ref=?, paid_at=CURRENT_TIMESTAMP WHERE sale_id=?`).run(ref || sale.payment_ref, id);
+          db.prepare(`UPDATE sales SET payment_status='LUNAS', payment_ref=?, amount_paid=total, change_amount=0, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(ref || sale.payment_ref, id);
+          db.prepare(`UPDATE payments SET payment_status='LUNAS', payment_ref=?, amount_paid=amount_due, change_amount=0, paid_at=CURRENT_TIMESTAMP WHERE sale_id=?`).run(ref || sale.payment_ref, id);
 
           db.prepare(`
             INSERT INTO audit_logs (action, entity, entity_id, user_name, details)
@@ -1015,44 +1051,63 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && url.pathname === '/api/reconciliation/close') {
         const d = await readBody(req);
         const closingDate = String(d.closing_date || '').trim();
-        if (!closingDate) return send(res, 400, { error: 'Tanggal operasional penutupan wajib diisi.' });
+        const dateObject = new Date(closingDate + 'T00:00:00Z');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(closingDate) || !Number.isFinite(dateObject.getTime()) || dateObject.toISOString().slice(0, 10) !== closingDate) {
+          return send(res, 400, { error: 'Tanggal operasional penutupan tidak valid.' });
+        }
 
         const cashierId = Number(d.cashier_id || 0);
         const cashier = db.prepare("SELECT name FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
         if (!cashier) return send(res, 400, { error: 'Pilih kasir bertugas: Faiz, Nick, atau Aris.' });
         const cashierName = cashier.name;
-        const openingCash = Math.max(0, Number(d.opening_cash || 0));
-
-        const systemCash = Number(d.system_cash || 0);
-        const actualCash = Number(d.actual_cash || 0);
-        const diffCash = actualCash - systemCash;
-
-        const systemQris = Number(d.system_qris || 0);
-        const actualQris = Number(d.actual_qris || 0);
-        const diffQris = actualQris - systemQris;
-
-        const systemDebit = Number(d.system_debit_bca || 0);
-        const actualDebit = Number(d.actual_debit_bca || 0);
-        const diffDebit = actualDebit - systemDebit;
-
-        const systemCredit = Number(d.system_credit_bca || 0);
-        const actualCredit = Number(d.actual_credit_bca || 0);
-        const diffCredit = actualCredit - systemCredit;
-
-        const totalSystem = systemCash + systemQris + systemDebit + systemCredit;
-        const totalActual = actualCash + actualQris + actualDebit + actualCredit;
-        const totalDiff = totalActual - totalSystem;
-
-        const notes = String(d.notes || '').trim();
-        if (totalDiff !== 0 && !notes) {
-          return send(res, 400, { error: 'Terdapat selisih rekonsiliasi. Catatan penjelasan selisih wajib diisi.' });
+        const openingCash = Number(d.opening_cash ?? 0);
+        const actualCash = Number(d.actual_cash ?? 0);
+        const actualQris = Number(d.actual_qris ?? 0);
+        const actualDebit = Number(d.actual_debit_bca ?? 0);
+        const actualCredit = Number(d.actual_credit_bca ?? 0);
+        if (![openingCash, actualCash, actualQris, actualDebit, actualCredit].every(value => Number.isSafeInteger(value) && value >= 0)) {
+          return send(res, 400, { error: 'Nominal penutupan harus berupa Rupiah bulat nol atau lebih.' });
         }
-
-        const status = totalDiff === 0 ? 'SELESAI' : 'SELESAI_DENGAN_SELISIH';
+        const notes = String(d.notes || '').trim();
         const reconciledBy = String(d.reconciled_by || cashierName).trim();
 
         db.exec('BEGIN IMMEDIATE');
         try {
+          const existingClosing = db.prepare('SELECT id FROM cashier_closings WHERE closing_date=? AND cashier_id=?').get(closingDate, cashierId);
+          if (existingClosing) {
+            db.exec('ROLLBACK');
+            return send(res, 409, { error: 'Penutupan kasir untuk tanggal ini sudah tersimpan.' });
+          }
+
+          // Recalculate paid system totals on the server while holding the write lock.
+          const methodRows = db.prepare(`
+            SELECT payment_method,COALESCE(SUM(total),0) total FROM sales
+            WHERE date(sold_at,'+7 hours')=? AND transaction_status='COMPLETED'
+              AND payment_status='LUNAS' AND cashier_id=? GROUP BY payment_method
+          `).all(closingDate, cashierId);
+          let systemCash = 0, systemQris = 0, systemDebit = 0, systemCredit = 0;
+          for (const row of methodRows) {
+            if (row.payment_method === 'QRIS') systemQris += row.total;
+            else if (row.payment_method.includes('Debit')) systemDebit += row.total;
+            else if (row.payment_method.includes('Kredit')) systemCredit += row.total;
+            else systemCash += row.total;
+          }
+          const diffCash = actualCash - systemCash;
+          const diffQris = actualQris - systemQris;
+          const diffDebit = actualDebit - systemDebit;
+          const diffCredit = actualCredit - systemCredit;
+          const totalSystem = systemCash + systemQris + systemDebit + systemCredit;
+          const totalActual = actualCash + actualQris + actualDebit + actualCredit;
+          const totalDiff = totalActual - totalSystem;
+          if (![systemCash, systemQris, systemDebit, systemCredit, totalSystem, totalActual, totalDiff].every(Number.isSafeInteger)) {
+            throw new Error('Total penutupan melebihi batas Rupiah integer yang didukung.');
+          }
+          if (totalDiff !== 0 && !notes) {
+            db.exec('ROLLBACK');
+            return send(res, 400, { error: 'Terdapat selisih rekonsiliasi. Catatan penjelasan selisih wajib diisi.' });
+          }
+          const status = totalDiff === 0 ? 'SELESAI' : 'SELESAI_DENGAN_SELISIH';
+
           const insertClosing = db.prepare(`
             INSERT INTO cashier_closings (
               closing_date, cashier_id, cashier_name, opening_cash,
