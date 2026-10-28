@@ -5,7 +5,7 @@ const { randomBytes } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const root = __dirname;
-const dataDir = path.join(root, 'data');
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 fs.mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(path.join(dataDir, 'howell-stockflow.db'));
 
@@ -23,16 +23,30 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 `);
-const userCount = db.prepare('SELECT count(*) c FROM users').get().c;
-if (userCount === 0) {
-  const insertUser = db.prepare('INSERT INTO users (id, username, name, role) VALUES (?, ?, ?, ?)');
-  insertUser.run(1, 'admin', 'Admin', 'admin');
-  insertUser.run(2, 'faiz', 'Faiz', 'kasir');
-} else {
-  db.prepare("UPDATE users SET username='admin', name='Admin', role='admin', active=1 WHERE id=1").run();
-  db.prepare("UPDATE users SET username='faiz', name='Faiz', role='kasir', active=1 WHERE id=2").run();
-  db.prepare("UPDATE users SET active=0 WHERE id NOT IN (1,2)").run();
+const ensureUser = db.prepare('UPDATE users SET username=?, name=?, role=?, active=1 WHERE id=?');
+const userByUsername = db.prepare('SELECT id FROM users WHERE username=?');
+const userById = db.prepare('SELECT id FROM users WHERE id=?');
+const insertUser = db.prepare('INSERT INTO users (id, username, name, role, active) VALUES (?, ?, ?, ?, 1)');
+for (const user of [
+  { id: 1, username: 'admin', name: 'Admin', role: 'admin' },
+  { id: 2, username: 'faiz', name: 'Faiz', role: 'kasir' },
+  { id: 3, username: 'nick', name: 'Nick', role: 'kasir' },
+  { id: 4, username: 'aris', name: 'Aris', role: 'kasir' }
+]) {
+  const existing = userByUsername.get(user.username);
+  if (existing) {
+    ensureUser.run(user.username, user.name, user.role, existing.id);
+  } else if (userById.get(user.id)) {
+    // Reuse the legacy cashier row (e.g. the old inactive Kasir 2) without
+    // changing any historical sale or closing snapshots.
+    ensureUser.run(user.username, user.name, user.role, user.id);
+  } else {
+    insertUser.run(user.id, user.username, user.name, user.role);
+  }
 }
+// Admin is retained as an inactive historical/system account. Only the three
+// assigned cashiers appear as active users in the operational app.
+db.prepare("UPDATE users SET active=0 WHERE username NOT IN ('faiz','nick','aris')").run();
 
 // 2. Products Table
 const productSql = `CREATE TABLE products_new (
@@ -155,7 +169,8 @@ const salesAddCols = {
   cashier_name: "TEXT NOT NULL DEFAULT 'Admin Howell'",
   notes: "TEXT NOT NULL DEFAULT ''",
   updated_at: "TEXT NOT NULL DEFAULT ''",
-  discount_rate: 'INTEGER NOT NULL DEFAULT 0'
+  discount_rate: 'INTEGER NOT NULL DEFAULT 0',
+  share_token: 'TEXT'
 };
 for (const [col, type] of Object.entries(salesAddCols)) {
   if (!sCols.has(col)) db.exec(`ALTER TABLE sales ADD COLUMN ${col} ${type};`);
@@ -185,6 +200,241 @@ const send = (res, status, body, type = 'application/json; charset=utf-8') => {
   const payload = type.startsWith('application/json') && !Buffer.isBuffer(body) ? JSON.stringify(body) : body;
   res.end(payload);
 };
+
+function makeInvoicePdf(sale, items) {
+  const pageWidth = 595;
+  const pageHeight = 842;
+  const margin = 44;
+  const ink = '#10263b';
+  const muted = '#68798b';
+  const line = '#dce4ec';
+  const pageOps = [];
+  let ops = [];
+  let y = 0;
+
+  const rgb = color => {
+    const value = color.replace('#', '');
+    return [0, 2, 4].map(i => (parseInt(value.slice(i, i + 2), 16) / 255).toFixed(3)).join(' ');
+  };
+  const safe = value => String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[–—−]/g, '-')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[^\x20-\x7e]/g, '');
+  const pdfString = value => safe(value).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const text = (value, x, top, size = 9, font = 'F1', color = ink, align = 'left', width = 0) => {
+    const s = safe(value);
+    const approx = s.length * size * (font === 'F2' ? 0.56 : 0.52);
+    const left = align === 'right' ? Math.max(x, x + width - approx) : x;
+    const baseline = pageHeight - top - size;
+    ops.push('BT /' + font + ' ' + size + ' Tf ' + rgb(color) + ' rg 1 0 0 1 ' + left.toFixed(2) + ' ' + baseline.toFixed(2) + ' Tm (' + pdfString(s) + ') Tj ET');
+  };
+  const rect = (x, top, width, height, color) => {
+    ops.push(rgb(color) + ' rg ' + x + ' ' + (pageHeight - top - height) + ' ' + width + ' ' + height + ' re f');
+  };
+  const rule = (x1, top, x2, color = line, thickness = 0.6) => {
+    ops.push(rgb(color) + ' RG ' + thickness + ' w ' + x1 + ' ' + (pageHeight - top) + ' m ' + x2 + ' ' + (pageHeight - top) + ' l S');
+  };
+  const money = value => 'Rp ' + Math.round(Number(value || 0)).toLocaleString('id-ID');
+  const time = value => {
+    try {
+      return new Intl.DateTimeFormat('id-ID', {
+        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+        timeZone: 'Asia/Jakarta'
+      }).format(new Date(String(value).replace(' ', 'T') + 'Z')) + ' WIB';
+    } catch {
+      return safe(value);
+    }
+  };
+  const wrap = (value, maxChars) => {
+    const words = safe(value).split(/\s+/);
+    const result = [];
+    let current = '';
+    for (const word of words) {
+      if (current && (current + ' ' + word).length > maxChars) {
+        result.push(current);
+        current = word;
+      } else {
+        current = current ? current + ' ' + word : word;
+      }
+    }
+    if (current) result.push(current);
+    return result.length ? result : [''];
+  };
+
+  const drawHeader = firstPage => {
+    if (firstPage) {
+      // Cropped Howell wordmark is an actual brand asset; PDF image is kept on white.
+      ops.push('q 118 0 0 25 ' + margin + ' ' + (pageHeight - 36 - 25) + ' cm /ImLogo Do Q');
+      text('HOWELL OFFICIAL STORE', 176, 38, 12, 'F2', ink);
+      text('PT Howell Niaga Indonesia - Official Exhibition Store', 176, 55, 8, 'F1', muted);
+      text('Kabel Audio Video, Adapter & Aksesoris Premium', 176, 68, 8, 'F1', muted);
+      text('INVOICE', 395, 35, 19, 'F2', ink, 'right', 156);
+      text(sale.invoice_no, 350, 61, 9, 'F2', ink, 'right', 201);
+      text(time(sale.sold_at), 350, 77, 8, 'F1', muted, 'right', 201);
+      rule(margin, 106, pageWidth - margin, ink, 1.5);
+      y = 121;
+      rect(margin, y, pageWidth - margin * 2, 86, '#f5f8fb');
+      const col1 = margin + 14;
+      const col2 = 306;
+      const row = (label, value, x, top, width = 225, color = ink) => {
+        text(label.toUpperCase(), x, top, 6.5, 'F2', muted);
+        text(value || '-', x, top + 9, 8.5, 'F2', color, 'left', width);
+      };
+      row('Pelanggan', sale.customer_name || 'Pelanggan', col1, y + 10);
+      row('Metode pembayaran', sale.payment_method || '-', col2, y + 10);
+      row('WhatsApp pelanggan', sale.customer_phone || '-', col1, y + 34);
+      row('Status pembayaran', sale.payment_status === 'LUNAS' ? 'LUNAS' : 'MENUNGGU PEMBAYARAN', col2, y + 34,
+        225, sale.payment_status === 'LUNAS' ? '#18804b' : '#a66900');
+      row('Kasir bertugas', sale.cashier_name || sale.user_name || '-', col1, y + 58);
+      row('Status transaksi', sale.transaction_status === 'CANCELLED' ? 'DIBATALKAN' : 'SELESAI',
+        col2, y + 58, 225, sale.transaction_status === 'CANCELLED' ? '#b42318' : '#18804b');
+      y += 103;
+    } else {
+      text('HOWELL OFFICIAL STORE', margin, 34, 10, 'F2', ink);
+      text('INVOICE  ' + sale.invoice_no, 310, 34, 9, 'F2', muted, 'right', 241);
+      rule(margin, 57, pageWidth - margin, ink, 1);
+      y = 72;
+    }
+  };
+  const drawTableHeader = () => {
+    const x = margin;
+    const top = y;
+    const w = pageWidth - margin * 2;
+    rect(x, top, w, 23, ink);
+    text('NO', x + 8, top + 7, 7, 'F2', '#ffffff');
+    text('PRODUK / SKU', x + 32, top + 7, 7, 'F2', '#ffffff');
+    text('PANJANG', 298, top + 7, 7, 'F2', '#ffffff', 'left', 46);
+    text('QTY', 348, top + 7, 7, 'F2', '#ffffff', 'right', 32);
+    text('HARGA / UNIT', 383, top + 7, 7, 'F2', '#ffffff', 'right', 76);
+    text('TOTAL', 451, top + 7, 7, 'F2', '#ffffff', 'right', 84);
+    y += 23;
+  };
+  const newPage = () => {
+    if (ops.length) pageOps.push(ops.join('\n'));
+    ops = [];
+    drawHeader(false);
+    drawTableHeader();
+  };
+
+  drawHeader(true);
+  text('RINCIAN BARANG', margin, y, 7, 'F2', muted);
+  text((items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0) + ' unit',
+    430, y, 7, 'F1', muted, 'right', pageWidth - margin - 430);
+  y += 15;
+  drawTableHeader();
+
+  (items || []).forEach((item, index) => {
+    const productLines = wrap(item.name, 43);
+    const rowHeight = Math.max(34, 11 + productLines.length * 10 + 10);
+    if (y + rowHeight > pageHeight - 145) newPage();
+    const top = y;
+    if (index % 2 === 1) rect(margin, top, pageWidth - margin * 2, rowHeight, '#fafbfd');
+    text(String(index + 1).padStart(2, '0'), margin + 8, top + 10, 8, 'F1', muted);
+    productLines.forEach((part, lineIndex) => {
+      text(part, margin + 32, top + 6 + lineIndex * 10, 8.3, lineIndex === 0 ? 'F2' : 'F1', ink);
+    });
+    const skuTop = top + 8 + productLines.length * 10;
+    text(item.sku, margin + 32, skuTop, 7, 'F1', muted);
+    text(item.panjang || '-', 298, top + 11, 7.5, 'F1', ink, 'left', 46);
+    text(String(item.quantity), 348, top + 11, 8, 'F1', ink, 'right', 32);
+    text(money(item.selling_unit_price || item.unit_price), 383, top + 11, 7.5, 'F1', ink, 'right', 76);
+    text(money(item.line_total), 466, top + 11, 7.5, 'F2', ink, 'right', 84);
+    rule(margin, top + rowHeight, pageWidth - margin, line, 0.45);
+    y += rowHeight;
+  });
+
+  if (y > pageHeight - 205) newPage();
+  const totalUnits = (items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const summaryTop = y + 18;
+  const summaryX = 312;
+  const summaryW = pageWidth - margin - summaryX;
+  const totalColor = sale.transaction_status === 'CANCELLED' ? '#b42318' : ink;
+  const totalRow = (label, value, top, opts = {}) => {
+    text(label, summaryX, top, opts.size || 8.5, opts.bold ? 'F2' : 'F1', opts.color || ink);
+    text(value, summaryX, top, opts.size || 8.5, opts.bold ? 'F2' : 'F1', opts.color || ink, 'right', summaryW);
+  };
+  text('TERIMA KASIH', margin, summaryTop + 4, 8, 'F2', ink);
+  text('Terima kasih telah berbelanja di Howell Official Store.', margin, summaryTop + 19, 7.5, 'F1', muted);
+  text('Simpan invoice ini sebagai bukti transaksi dan garansi.', margin, summaryTop + 32, 7.5, 'F1', muted);
+  totalRow('Subtotal (' + totalUnits + ' unit)', money(sale.subtotal), summaryTop, { color: muted });
+  if (Number(sale.discount) > 0) {
+    totalRow(sale.discount_rate ? 'Diskon ' + sale.discount_rate + '%' : 'Diskon transaksi',
+      '- ' + money(sale.discount), summaryTop + 16, { color: '#b42318' });
+  }
+  const totalTop = summaryTop + (Number(sale.discount) > 0 ? 38 : 22);
+  rule(summaryX, totalTop - 5, pageWidth - margin, ink, 1.1);
+  totalRow('TOTAL TAGIHAN', money(sale.total), totalTop, { bold: true, size: 12, color: totalColor });
+  if (sale.payment_method === 'Tunai') {
+    totalRow('Uang diterima', money(sale.amount_paid || sale.total), totalTop + 23, { size: 8, color: muted });
+    totalRow('Kembalian', money(sale.change_amount || 0), totalTop + 37, { size: 8, color: muted });
+  }
+  y = Math.max(summaryTop + 55, totalTop + (sale.payment_method === 'Tunai' ? 57 : 31));
+  rule(margin, y + 12, pageWidth - margin, line, 0.6);
+  text('Invoice elektronik Howell StockFlow', margin, y + 22, 7, 'F1', muted);
+  text('Nomor invoice: ' + sale.invoice_no, margin, y + 34, 7, 'F1', muted);
+
+  pageOps.push(ops.join('\n'));
+  const pageCount = pageOps.length;
+  for (let index = 0; index < pageCount; index++) {
+    const footerY = 30;
+    pageOps[index] += '\n' +
+      rgb(muted) + ' RG 0.45 w ' + margin + ' ' + footerY + ' m ' + (pageWidth - margin) + ' ' + footerY + ' l S\n' +
+      'BT /F1 7 Tf ' + rgb(muted) + ' rg 1 0 0 1 ' + margin + ' 17' +
+      ' Tm (Howell StockFlow  |  ' + pdfString(sale.invoice_no) + ') Tj ET\n' +
+      'BT /F1 7 Tf ' + rgb(muted) + ' rg 1 0 0 1 ' + (pageWidth - margin - 58) + ' 17' +
+      ' Tm (Halaman ' + (index + 1) + ' / ' + pageCount + ') Tj ET';
+  }
+  const fontRegular = Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const fontBold = Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+  const logoPath = path.join(root, 'assets', 'howell-invoice-logo.jpg');
+  const logo = fs.readFileSync(logoPath);
+  const objects = [null];
+  const addObject = body => { objects.push(body); return objects.length - 1; };
+  const catalogId = addObject(null);
+  const pagesId = addObject(null);
+  const regularId = addObject(fontRegular);
+  const boldId = addObject(fontBold);
+  const logoId = addObject(Buffer.concat([
+    Buffer.from('<< /Type /XObject /Subtype /Image /Width 864 /Height 184 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + logo.length + ' >>\nstream\n'),
+    logo,
+    Buffer.from('\nendstream')
+  ]));
+  const pageIds = [];
+  for (const content of pageOps) {
+    const bytes = Buffer.from(content, 'ascii');
+    const contentId = addObject(Buffer.concat([
+      Buffer.from('<< /Length ' + bytes.length + ' >>\nstream\n'), bytes, Buffer.from('\nendstream')
+    ]));
+    const pageId = addObject(null);
+    pageIds.push(pageId);
+    objects[pageId] = Buffer.from(
+      '<< /Type /Page /Parent ' + pagesId + ' 0 R /MediaBox [0 0 ' + pageWidth + ' ' + pageHeight +
+      '] /Resources << /Font << /F1 ' + regularId + ' 0 R /F2 ' + boldId +
+      ' 0 R >> /XObject << /ImLogo ' + logoId + ' 0 R >> >> /Contents ' + contentId + ' 0 R >>'
+    );
+  }
+  objects[catalogId] = Buffer.from('<< /Type /Catalog /Pages ' + pagesId + ' 0 R >>');
+  objects[pagesId] = Buffer.from('<< /Type /Pages /Kids [' + pageIds.map(id => id + ' 0 R').join(' ') + '] /Count ' + pageCount + ' >>');
+
+  const parts = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'binary')];
+  const offsets = [0];
+  let position = parts[0].length;
+  for (let id = 1; id < objects.length; id++) {
+    offsets[id] = position;
+    const object = Buffer.concat([Buffer.from(id + ' 0 obj\n'), objects[id], Buffer.from('\nendobj\n')]);
+    parts.push(object);
+    position += object.length;
+  }
+  const xrefOffset = position;
+  let xref = 'xref\n0 ' + objects.length + '\n0000000000 65535 f \n';
+  for (let id = 1; id < objects.length; id++) xref += String(offsets[id]).padStart(10, '0') + ' 00000 n \n';
+  xref += 'trailer\n<< /Size ' + objects.length + ' /Root ' + catalogId + ' 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF';
+  parts.push(Buffer.from(xref, 'ascii'));
+  return Buffer.concat(parts);
+}
 
 const readBody = req => new Promise((resolve, reject) => {
   let s = '';
@@ -255,11 +505,31 @@ const VALID_PAYMENT_METHODS = [
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
+    const invoicePdfMatch = url.pathname.match(/^\/invoice\/([A-Za-z0-9_-]{32,64})\.pdf$/);
+    if (req.method === 'GET' && invoicePdfMatch) {
+      const sale = db.prepare('SELECT * FROM sales WHERE share_token=?').get(invoicePdfMatch[1]);
+      if (!sale) return send(res, 404, 'Invoice tidak ditemukan atau tautan sudah tidak berlaku.', 'text/plain; charset=utf-8');
+      const items = db.prepare('SELECT si.*, p.panjang FROM sale_items si LEFT JOIN products p ON p.id=si.product_id WHERE si.sale_id=? ORDER BY si.id').all(sale.id);
+      const pdf = makeInvoicePdf(sale, items);
+      const disposition = url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
+      const filename = String(sale.invoice_no || 'Howell-Invoice').replace(/[^A-Za-z0-9_-]/g, '-');
+      res.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Length': pdf.length,
+        'Content-Disposition': disposition + '; filename="' + filename + '.pdf"',
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      return res.end(pdf);
+    }
+
     if (url.pathname.startsWith('/api/')) {
 
       // ==================== USERS / CASHIERS ====================
       if (req.method === 'GET' && url.pathname === '/api/users') {
-        const users = db.prepare('SELECT id, username, name, role, active FROM users WHERE active=1 ORDER BY id').all();
+        // This endpoint populates cashier controls; the administrator account
+        // remains available for system administration but is not a cashier.
+        const users = db.prepare("SELECT id, username, name, role, active FROM users WHERE active=1 AND role='kasir' ORDER BY id").all();
         return send(res, 200, users);
       }
 
@@ -349,7 +619,23 @@ const server = http.createServer(async (req, res) => {
           transactionStatus, transactionStatus,
           q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`
         );
-        return send(res, 200, rows);
+        return send(res, 200, rows.map(({ share_token, ...row }) => row));
+      }
+
+      const shareLinkMatch = url.pathname.match(/^\/api\/sales\/(\d+)\/share-link$/);
+      if (req.method === 'POST' && shareLinkMatch) {
+        const id = Number(shareLinkMatch[1]);
+        const sale = db.prepare('SELECT id, invoice_no, share_token FROM sales WHERE id=?').get(id);
+        if (!sale) return send(res, 404, { error: 'Transaksi tidak ditemukan.' });
+        const token = sale.share_token || randomBytes(32).toString('base64url');
+        if (!sale.share_token) db.prepare('UPDATE sales SET share_token=? WHERE id=?').run(token, id);
+        const configuredOrigin = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+        const forwardedProto = String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
+        const requestOrigin = configuredOrigin || (forwardedProto + '://' + req.headers.host);
+        return send(res, 200, {
+          invoice_no: sale.invoice_no,
+          url: requestOrigin + '/invoice/' + token + '.pdf'
+        });
       }
 
       // ==================== SINGLE SALE DETAIL ====================
@@ -365,7 +651,8 @@ const server = http.createServer(async (req, res) => {
           ORDER BY si.id
         `).all(sale.id);
         const payments = db.prepare('SELECT * FROM payments WHERE sale_id=? ORDER BY id').all(sale.id);
-        return send(res, 200, { ...sale, items, payments });
+        const { share_token, ...publicSale } = sale;
+        return send(res, 200, { ...publicSale, items, payments });
       }
 
       // ==================== CREATE SALE ====================
@@ -384,8 +671,9 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Cashier handling: verify ID and lookup name
-        const cashierId = Number(data.cashier_id || 1);
-        const userObj = db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(cashierId) || { id: 1, name: 'Admin Howell' };
+        const cashierId = Number(data.cashier_id || 0);
+        const userObj = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
+        if (!userObj) return send(res, 400, { error: 'Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.' });
         const cashierName = userObj.name;
 
         // Payment status & verification
@@ -450,19 +738,20 @@ const server = http.createServer(async (req, res) => {
 
           const now = new Date();
           const invoice = `HWF-${now.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${String(Date.now()).slice(-5)}`;
+          const shareToken = randomBytes(32).toString('base64url');
 
           const saleInsert = db.prepare(`
             INSERT INTO sales (
               invoice_no, customer_name, customer_phone, payment_method, payment_status,
               transaction_status, payment_ref, subtotal, discount, discount_rate, total, amount_paid,
-              change_amount, cashier_id, cashier_name, notes, user_name, location
-            ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pameran')
+              change_amount, cashier_id, cashier_name, notes, user_name, location, share_token
+            ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pameran', ?)
           `);
 
           const saleRes = saleInsert.run(
             invoice, customerName, customerPhone, paymentMethod, paymentStatus,
             paymentRef, subtotal, discount, discountRate, total, amountPaid,
-            changeAmount, cashierId, cashierName, notes, cashierName
+            changeAmount, cashierId, cashierName, notes, cashierName, shareToken
           );
           const saleId = Number(saleRes.lastInsertRowid);
 
@@ -601,7 +890,7 @@ const server = http.createServer(async (req, res) => {
         const reason = String(data.reason || '').trim();
         if (!reason) return send(res, 400, { error: 'Alasan koreksi data kasir wajib dicatat untuk audit log.' });
 
-        const userObj = db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(newCashierId);
+        const userObj = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role='kasir'").get(newCashierId);
         if (!userObj) return send(res, 404, { error: 'Data kasir baru tidak ditemukan.' });
 
         db.exec('BEGIN IMMEDIATE');
@@ -728,8 +1017,10 @@ const server = http.createServer(async (req, res) => {
         const closingDate = String(d.closing_date || '').trim();
         if (!closingDate) return send(res, 400, { error: 'Tanggal operasional penutupan wajib diisi.' });
 
-        const cashierId = Number(d.cashier_id || 1);
-        const cashierName = String(d.cashier_name || 'Admin Howell').trim();
+        const cashierId = Number(d.cashier_id || 0);
+        const cashier = db.prepare("SELECT name FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
+        if (!cashier) return send(res, 400, { error: 'Pilih kasir bertugas: Faiz, Nick, atau Aris.' });
+        const cashierName = cashier.name;
         const openingCash = Math.max(0, Number(d.opening_cash || 0));
 
         const systemCash = Number(d.system_cash || 0);
@@ -1125,4 +1416,5 @@ process.on('uncaughtException', err => console.error('Uncaught Exception:', err)
 process.on('unhandledRejection', err => console.error('Unhandled Rejection:', err));
 
 const port = Number(process.env.PORT || 3001);
-server.listen(port, () => console.log(`Howell StockFlow berjalan di http://127.0.0.1:${port}`));
+const host = process.env.HOST || '127.0.0.1';
+server.listen(port, host, () => console.log(`Howell StockFlow berjalan di http://${host}:${port}`));

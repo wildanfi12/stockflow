@@ -59,16 +59,14 @@ function notify(message) {
 
 /* ==================== USER & CASHIER SYSTEM ==================== */
 let allUsers = [];
-let activeUser = { id: 1, name: 'Admin Howell', role: 'admin' };
+let activeUser = { id: 1, name: 'Admin', role: 'admin' };
+let activeCashier = { id: 2, name: 'Faiz', role: 'kasir' };
 
 async function initUsers() {
   try {
     allUsers = await api('/api/users');
     const savedId = Number(localStorage.getItem('howell_active_cashier_id'));
-    if (savedId) {
-      const found = allUsers.find(u => u.id === savedId && u.active);
-      if (found) activeUser = { id: found.id, name: found.name, role: found.role };
-    }
+    activeCashier = allUsers.find(u => u.id === savedId && u.active) || allUsers[0] || activeCashier;
     updateUserDisplay();
     populateCashierSelects();
   } catch (e) {
@@ -77,53 +75,51 @@ async function initUsers() {
 }
 
 function updateUserDisplay() {
-  const initials = activeUser.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HW';
-  if ($('#currentCashierName')) $('#currentCashierName').textContent = activeUser.name;
-  if ($('#currentCashierRole')) {
-    $('#currentCashierRole').textContent = activeUser.role === 'admin'
-      ? `Administrator (ID: ${activeUser.id})`
-      : `Kasir Aktif (ID: ${activeUser.id})`;
-  }
+  const initials = activeCashier.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HW';
+  if ($('#currentCashierName')) $('#currentCashierName').textContent = activeCashier.name;
+  if ($('#currentCashierRole')) $('#currentCashierRole').textContent = `Kasir Aktif (ID: ${activeCashier.id})`;
   if ($('#currentAvatar')) $('#currentAvatar').textContent = initials;
-  if ($('#topCashierName')) $('#topCashierName').textContent = activeUser.name;
+  if ($('#topCashierName')) $('#topCashierName').textContent = activeCashier.name;
   if ($('#topAvatar')) $('#topAvatar').textContent = initials;
   if ($('#closeReconciledBy') && !$('#closeReconciledBy').value) {
-    $('#closeReconciledBy').value = activeUser.name;
+    $('#closeReconciledBy').value = activeCashier.name;
   }
 }
 
 function populateCashierSelects() {
   const options = allUsers.map(u =>
-    `<option value="${u.id}">${esc(u.name)} (${u.role === 'admin' ? 'Admin' : 'Kasir'})</option>`
+    `<option value="${u.id}">${esc(u.name)}</option>`
   ).join('');
+  const defaultCashier = allUsers.find(u => u.id === activeCashier.id) || allUsers[0];
+  const defaultCashierId = defaultCashier ? String(defaultCashier.id) : '';
 
   if ($('#saleCashierSelect')) {
     $('#saleCashierSelect').innerHTML = options;
-    $('#saleCashierSelect').value = String(activeUser.id);
+    $('#saleCashierSelect').value = defaultCashierId;
   }
   if ($('#salesCashierFilter')) {
     $('#salesCashierFilter').innerHTML = '<option value="">Semua Kasir</option>' + options;
   }
   if ($('#closeCashierSelect')) {
     $('#closeCashierSelect').innerHTML = options;
-    $('#closeCashierSelect').value = String(activeUser.id);
+    $('#closeCashierSelect').value = defaultCashierId;
   }
 }
 
 function showUserSwitcherModal() {
   modal('Ganti Kasir Bertugas', `
     <div style="font-size:12px;color:#556575;margin-bottom:12px">
-      Pilih akun kasir yang sedang aktif melayani transaksi kasir dan rekonsiliasi operasional:
+      Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.
     </div>
-    <div style="display:flex;flex-direction:column;gap:8px" id="userRadioList">
+      <div style="display:flex;flex-direction:column;gap:8px" id="userRadioList">
       ${allUsers.map(u => `
-        <label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid ${u.id === activeUser.id ? 'var(--navy)' : '#e2e8f0'};border-radius:6px;background:${u.id === activeUser.id ? '#f0f5fa' : '#fff'};cursor:pointer">
-          <input type="radio" name="selected_user" value="${u.id}" ${u.id === activeUser.id ? 'checked' : ''}>
+        <label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid ${u.id === activeCashier.id ? 'var(--navy)' : '#e2e8f0'};border-radius:6px;background:${u.id === activeCashier.id ? '#f0f5fa' : '#fff'};cursor:pointer">
+          <input type="radio" name="selected_user" value="${u.id}" ${u.id === activeCashier.id ? 'checked' : ''}>
           <div style="flex:1">
             <b>${esc(u.name)}</b>
-            <div style="font-size:10px;color:#718096">${u.role === 'admin' ? 'Administrator Sistem' : 'Staf Kasir Pameran'} · ID: ${u.id}</div>
+            <div style="font-size:10px;color:#718096">Staf Kasir Pameran · ID: ${u.id}</div>
           </div>
-          ${u.id === activeUser.id ? '<span style="font-size:10px;font-weight:700;color:var(--navy);background:#e2ebf5;padding:2px 8px;border-radius:10px">Aktif</span>' : ''}
+          ${u.id === activeCashier.id ? '<span style="font-size:10px;font-weight:700;color:var(--navy);background:#e2ebf5;padding:2px 8px;border-radius:10px">Aktif</span>' : ''}
         </label>
       `).join('')}
     </div>
@@ -131,7 +127,7 @@ function showUserSwitcherModal() {
     const selectedId = Number(d.selected_user);
     const chosen = allUsers.find(u => u.id === selectedId);
     if (!chosen) throw new Error('Pilih salah satu kasir.');
-    activeUser = { id: chosen.id, name: chosen.name, role: chosen.role };
+    activeCashier = { id: chosen.id, name: chosen.name, role: chosen.role };
     localStorage.setItem('howell_active_cashier_id', String(chosen.id));
     updateUserDisplay();
     populateCashierSelects();
@@ -440,8 +436,9 @@ $('#completeSale')?.addEventListener('click', async () => {
     return notify(`Nominal tunai diterima (${rupiah(cash)}) kurang dari total tagihan (${rupiah(total)}).`);
   }
 
-  const cashierId = Number($('#saleCashierSelect')?.value || activeUser.id);
-  const selectedCashier = allUsers.find(u => u.id === cashierId) || activeUser;
+  const cashierId = Number($('#saleCashierSelect')?.value || activeCashier.id);
+  const selectedCashier = allUsers.find(u => u.id === cashierId) || allUsers[0];
+  if (!selectedCashier) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
   const isConfirmed = $('#paymentConfirmed')?.checked ?? true;
   const paymentStatus = (paymentMethod !== 'Tunai' && !isConfirmed) ? 'MENUNGGU_PEMBAYARAN' : 'LUNAS';
 
@@ -496,388 +493,161 @@ $('#completeSale')?.addEventListener('click', async () => {
   }
 });
 
-/* ==================== PROFESSIONAL INVOICE & PRINT SYSTEM ==================== */
-function getPaymentStatusBadge(status) {
-  if (status === 'LUNAS') return '<span class="status-badge paid">LUNAS</span>';
-  if (status === 'MENUNGGU_PEMBAYARAN') return '<span class="status-badge pending">MENUNGGU PEMBAYARAN</span>';
-  if (status === 'DIBATALKAN') return '<span class="status-badge cancelled">DIBATALKAN</span>';
-  return `<span class="status-badge">${esc(status)}</span>`;
-}
-
+/* ==================== INVOICE ONLINE & PDF ==================== */
 function showInvoiceModal(s) {
   const host = $('#modalHost');
-  const itemsRows = (s.items || []).map((it, idx) => {
-    const sellPrice = Number(it.selling_unit_price || it.unit_price);
+  const itemCount = (s.items || []).reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const itemsRows = (s.items || []).map(item => {
+    const sellPrice = Number(item.selling_unit_price ?? item.unit_price);
     return `
-    <tr>
-      <td style="text-align:center">${idx + 1}</td>
-      <td><b>${esc(it.sku)}</b></td>
-      <td>${esc(it.name)}</td>
-      <td style="text-align:center">${esc(it.panjang || '—')}</td>
-      <td style="text-align:center"><b>${it.quantity}</b></td>
-      <td class="num">${rupiah(it.unit_price)}</td>
-      <td class="num">${rupiah(sellPrice)}</td>
-      <td class="num"><b>${rupiah(it.line_total)}</b></td>
-    </tr>
-  `;
+      <tr>
+        <td class="invoice-product-cell">
+          <b>${esc(item.name)}</b>
+          <small>${esc(item.sku)}${item.panjang ? ' · ' + esc(item.panjang) : ''}</small>
+        </td>
+        <td class="invoice-qty-cell">${item.quantity}</td>
+        <td class="invoice-money-cell">${rupiah(sellPrice)}</td>
+        <td class="invoice-money-cell"><b>${rupiah(item.line_total)}</b></td>
+      </tr>`;
   }).join('');
+  const txCancelled = s.transaction_status === 'CANCELLED';
+  const txStatus = txCancelled ? 'DIBATALKAN' : 'SELESAI';
 
   host.innerHTML = `
     <div class="modal-backdrop">
-      <div class="invoice-modal-content">
+      <section class="invoice-modal-content invoice-modal-clean" role="dialog" aria-modal="true" aria-labelledby="invoiceDialogTitle">
         <div class="invoice-paper" id="invoicePaperArea">
-          <!-- Header -->
-          <div class="invoice-top">
+          <header class="invoice-top">
             <div class="inv-brand-box">
-              <img class="invoice-logo" src="${appUrl('/assets/howell-logo.png')}" alt="Logo Howell">
+              <img class="invoice-logo" src="${appUrl('/assets/howell-logo.png')}" alt="Howell">
               <div class="inv-company">
                 <h2>HOWELL OFFICIAL STORE</h2>
                 <p>PT Howell Niaga Indonesia · Official Exhibition Store</p>
-                <p style="color:#8a99a8">Kabel Audio Video, Adapter & Aksesoris Premium</p>
+                <p>Kabel Audio Video, Adapter & Aksesoris Premium</p>
               </div>
             </div>
             <div class="inv-meta-right">
-              <h1 class="inv-title">INVOICE</h1>
+              <h1 class="inv-title" id="invoiceDialogTitle">INVOICE</h1>
               <div class="inv-no">${esc(s.invoice_no)}</div>
-              <div style="font-size:10px;color:#788696;margin-top:4px">${timeFmt(s.sold_at)} WIB</div>
+              <time>${esc(timeFmt(s.sold_at))} WIB</time>
             </div>
-          </div>
+          </header>
 
-          <!-- Transaction details -->
-          <div class="inv-details-grid">
-            <div>
-              <small>Kasir yang Memproses</small>
-              <b>${esc(s.cashier_name || s.user_name || 'Admin Howell')} <span style="font-weight:400;color:#718096">(ID: ${s.cashier_id || 1})</span></b>
-            </div>
-            <div>
-              <small>Nama Pelanggan</small>
-              <b>${esc(s.customer_name || 'Pelanggan Tunai')}</b>
-            </div>
-            <div>
-              <small>Metode Pembayaran</small>
-              <b>${esc(s.payment_method)}</b>
-            </div>
-            <div>
-              <small>No. WhatsApp / Telepon</small>
-              <b>${esc(s.customer_phone || '—')}</b>
-            </div>
-            <div>
-              <small>Status Pembayaran</small>
-              <div>${getPaymentStatusBadge(s.payment_status)}</div>
-            </div>
-            <div>
-              <small>Status Transaksi</small>
-              <b style="color:${s.transaction_status === 'CANCELLED' ? 'var(--red)' : 'var(--green)'}">${s.transaction_status === 'CANCELLED' ? 'DIBATALKAN' : 'SELESAI (COMPLETED)'}</b>
-            </div>
-            ${s.payment_ref ? `
-              <div style="grid-column:span 2">
-                <small>Referensi Pembayaran / Approval Code EDC / QRIS</small>
-                <b style="font-family:monospace;letter-spacing:1px">${esc(s.payment_ref)}</b>
-              </div>
-            ` : ''}
-            ${s.notes ? `
-              <div style="grid-column:span 2">
-                <small>Catatan Transaksi</small>
-                <span style="color:#4a5568">${esc(s.notes)}</span>
-              </div>
-            ` : ''}
-          </div>
+          <section class="inv-details-grid" aria-label="Detail transaksi">
+            <div><small>Untuk pelanggan</small><b>${esc(s.customer_name || 'Pelanggan')}</b></div>
+            <div><small>WhatsApp</small><b>${esc(s.customer_phone || '—')}</b></div>
+            <div><small>Kasir</small><b>${esc(s.cashier_name || s.user_name || '—')}</b></div>
+            <div><small>Pembayaran</small><b>${esc(s.payment_method || '—')}</b></div>
+            <div><small>Status pembayaran</small><b class="invoice-status ${s.payment_status === 'LUNAS' ? 'is-paid' : 'is-pending'}">${s.payment_status === 'LUNAS' ? 'LUNAS' : 'MENUNGGU PEMBAYARAN'}</b></div>
+            <div><small>Status transaksi</small><b class="invoice-status ${txCancelled ? 'is-cancelled' : 'is-paid'}">${txStatus}</b></div>
+            ${s.payment_ref ? `<div class="invoice-reference"><small>Referensi pembayaran</small><b>${esc(s.payment_ref)}</b></div>` : ''}
+          </section>
 
-          <!-- Items Table -->
-          <table class="invoice-items-table">
-            <thead>
-              <tr>
-                <th style="width:30px;text-align:center">NO</th>
-                <th style="width:90px">SKU</th>
-                <th>NAMA BARANG</th>
-                <th style="width:65px;text-align:center">PANJANG</th>
-                <th style="width:50px;text-align:center">QTY</th>
-                <th class="num" style="width:95px">HARGA ASLI</th>
-                <th class="num" style="width:105px">HARGA JUAL / PCS</th>
-                <th class="num" style="width:115px">JUMLAH</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsRows}
-            </tbody>
+          <div class="invoice-items-heading">
+            <h3>Rincian barang</h3><span>${itemCount} unit</span>
+          </div>
+          <table class="invoice-items-table invoice-clean-table">
+            <thead><tr><th>PRODUK</th><th class="center">QTY</th><th class="num">HARGA / UNIT</th><th class="num">JUMLAH</th></tr></thead>
+            <tbody>${itemsRows}</tbody>
           </table>
 
-          <!-- Totals -->
-          <div class="inv-totals-box">
-            <div class="inv-tot-line">
-              <span>Subtotal (${(s.items || []).reduce((n, x) => n + x.quantity, 0)} unit):</span>
-              <b>${rupiah(s.subtotal)}</b>
+          <section class="invoice-bottom-summary">
+            <div class="invoice-thanks">
+              <b>Terima kasih telah berbelanja di Howell.</b>
+              <p>Invoice elektronik ini merupakan bukti transaksi resmi Howell StockFlow.</p>
             </div>
-            ${s.discount > 0 ? `
-              <div class="inv-tot-line" style="color:var(--red)">
-                <span>${s.discount_rate ? `Diskon ${s.discount_rate}%:` : 'Diskon Transaksi:'}</span>
-                <b>- ${rupiah(s.discount)}</b>
-              </div>
-            ` : ''}
-            <div class="inv-tot-line grand">
-              <span>TOTAL TAGIHAN:</span>
-              <span>${rupiah(s.total)}</span>
+            <div class="inv-totals-box">
+              <div class="inv-tot-line"><span>Subtotal (${itemCount} unit)</span><b>${rupiah(s.subtotal)}</b></div>
+              ${s.discount > 0 ? `<div class="inv-tot-line discount-line"><span>${s.discount_rate ? 'Diskon ' + s.discount_rate + '%' : 'Diskon transaksi'}</span><b>− ${rupiah(s.discount)}</b></div>` : ''}
+              <div class="inv-tot-line grand"><span>TOTAL TAGIHAN</span><b>${rupiah(s.total)}</b></div>
+              ${s.payment_method === 'Tunai' ? `
+                <div class="inv-tot-line cash-line"><span>Uang diterima</span><span>${rupiah(s.amount_paid || s.total)}</span></div>
+                <div class="inv-tot-line cash-line"><span>Kembalian</span><span>${rupiah(s.change_amount || 0)}</span></div>
+              ` : ''}
             </div>
-            ${s.payment_method === 'Tunai' ? `
-              <div class="inv-tot-line" style="margin-top:6px;font-size:11px">
-                <span>Tunai Diterima:</span>
-                <span>${rupiah(s.amount_paid || s.total)}</span>
-              </div>
-              <div class="inv-tot-line" style="font-size:11px">
-                <span>Kembalian:</span>
-                <span>${rupiah(s.change_amount || 0)}</span>
-              </div>
-            ` : ''}
-          </div>
-
-          <!-- Footer terms -->
-          <div class="inv-footer">
-            <p><b>Terima kasih telah berbelanja di Howell Official Store.</b></p>
-            <p>Invoice ini sah diterbitkan secara elektronik oleh sistem Howell StockFlow. Simpan invoice ini untuk bukti garansi produk resmi Howell.</p>
-          </div>
+          </section>
         </div>
 
-        <!-- WhatsApp Helper Notification (Hidden by default, shown upon WA share) -->
-        <div id="waHelperBox" style="display:none;margin:0 30px">
-          <div class="wa-helper-card">
-            <b>Untuk mengirim PDF lewat WhatsApp:</b>
-            Simpan PDF dari jendela cetak, lalu lampirkan file tersebut di chat. WhatsApp Web tidak mengizinkan situs melampirkan file secara otomatis. Pratinjau browser terbuka di komputer ini; tautan online untuk pelanggan memerlukan hosting publik.
-          </div>
+        <div class="invoice-share-note">
+          <span class="invoice-share-icon" aria-hidden="true">↗</span>
+          <div><b>Kirim invoice PDF melalui WhatsApp</b><p>WhatsApp akan membuka pesan berisi tautan PDF. Pelanggan dapat membuka atau mengunduh invoice secara online.</p></div>
         </div>
-
-        <!-- Action Buttons -->
-        <div class="inv-actions-footer">
+        <footer class="inv-actions-footer invoice-actions-clean">
+          <button class="button secondary" id="btnCopyInvoiceLink">Salin tautan PDF</button>
           <div class="inv-btn-group">
-            <button class="button secondary" id="btnPreviewInvoice" title="Tampilkan tampilan penuh invoice">👁 <span>Preview</span></button>
-            <button class="button secondary" id="btnOpenInvoiceBrowser" title="Buka invoice di tab browser">🌐 <span>Buka di Browser</span></button>
-            <button class="button secondary wa-open-btn" id="btnShareWhatsApp" title="Simpan PDF dan siapkan chat WhatsApp">📱 <span>Siapkan PDF & WhatsApp</span></button>
-          </div>
-          <div class="inv-btn-group">
-            <button class="button secondary" id="btnReprintInvoice" title="Cetak ulang struk / invoice">↻ <span>Cetak Ulang</span></button>
-            <button class="button secondary" id="btnDownloadPdf" title="Simpan sebagai dokumen PDF">⤓ <span>Download PDF</span></button>
-            <button class="button primary" id="btnPrintInvoice">🖨 <span>Print Invoice</span></button>
+            <button class="button secondary" id="btnOpenInvoiceBrowser">Buka PDF</button>
+            <button class="button secondary" id="btnDownloadPdf">Unduh PDF</button>
+            <button class="button wa-open-btn" id="btnShareWhatsApp">Kirim via WhatsApp</button>
             <button class="button secondary" id="btnCloseInvoiceModal">Tutup</button>
           </div>
-        </div>
-      </div>
-    </div>
-  `;
+        </footer>
+      </section>
+    </div>`;
 
-  // Bind Actions
   $('#btnCloseInvoiceModal').onclick = () => host.innerHTML = '';
-  host.querySelector('.modal-backdrop').onclick = e => {
-    if (e.target.classList.contains('modal-backdrop')) host.innerHTML = '';
+  host.querySelector('.modal-backdrop').onclick = event => {
+    if (event.target.classList.contains('modal-backdrop')) host.innerHTML = '';
   };
-
-  $('#btnPrintInvoice').onclick = () => printInvoiceDocument(s, 'A4');
-  $('#btnDownloadPdf').onclick = () => printInvoiceDocument(s, 'PDF');
-  $('#btnReprintInvoice').onclick = () => printInvoiceDocument(s, 'A4');
-  $('#btnOpenInvoiceBrowser').onclick = () => printInvoiceDocument(s, 'A4', false);
-
-  $('#btnPreviewInvoice').onclick = () => {
-    const paper = $('#invoicePaperArea');
-    if (paper) {
-      paper.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      paper.style.transition = 'box-shadow 0.3s ease';
-      paper.style.boxShadow = '0 0 0 3px var(--yellow)';
-      setTimeout(() => paper.style.boxShadow = 'none', 1200);
+  $('#btnOpenInvoiceBrowser').onclick = () => openInvoicePdf(s, false);
+  $('#btnDownloadPdf').onclick = () => openInvoicePdf(s, true);
+  $('#btnShareWhatsApp').onclick = () => shareInvoiceWhatsApp(s);
+  $('#btnCopyInvoiceLink').onclick = async () => {
+    try {
+      const result = await getInvoicePdfLink(s);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(result.url);
+        notify('Tautan PDF invoice disalin.');
+      } else {
+        prompt('Salin tautan PDF invoice ini:', result.url);
+      }
+    } catch (error) {
+      notify(error.message);
     }
   };
-
-  $('#btnShareWhatsApp').onclick = () => shareInvoiceWhatsApp(s);
 }
 
-function shareInvoiceWhatsApp(s) {
+async function getInvoicePdfLink(s) {
+  return api('/api/sales/' + encodeURIComponent(s.id) + '/share-link', {
+    method: 'POST',
+    body: '{}'
+  });
+}
+
+async function openInvoicePdf(s, download = false) {
+  const tab = window.open('about:blank', '_blank');
+  if (!tab) return notify('Izinkan pop-up browser untuk membuka PDF invoice.');
+  try {
+    const result = await getInvoicePdfLink(s);
+    tab.opener = null;
+    tab.location.href = result.url + (download ? '?download=1' : '');
+  } catch (error) {
+    tab.close();
+    notify(error.message);
+  }
+}
+
+async function shareInvoiceWhatsApp(s) {
   let phone = normalizePhone(s.customer_phone);
   if (!phone || phone.length < 9) {
-    const promptVal = prompt('Masukkan nomor WhatsApp pelanggan (contoh: 08123456789):', s.customer_phone || '');
-    if (!promptVal) return;
-    phone = normalizePhone(promptVal);
-    if (!phone || phone.length < 9) {
-      return notify('Nomor WhatsApp tidak valid. Gunakan format nomor seluler Indonesia.');
-    }
+    const entered = prompt('Masukkan nomor WhatsApp pelanggan (contoh: 08123456789):', s.customer_phone || '');
+    if (!entered) return;
+    phone = normalizePhone(entered);
+    if (!phone || phone.length < 9) return notify('Nomor WhatsApp tidak valid.');
   }
 
-  const message = `Halo ${s.customer_name || 'Pelanggan'}, berikut invoice Howell ${s.invoice_no}. PDF invoice akan saya lampirkan di chat ini.`;
-  printInvoiceDocument(s, 'PDF');
-  const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
-  window.open(waUrl, '_blank');
-
-  const helperBox = $('#waHelperBox');
-  if (helperBox) helperBox.style.display = 'block';
-  notify('Simpan PDF dari jendela cetak, lalu lampirkan file tersebut di WhatsApp.');
-}
-
-function printInvoiceDocument(s, mode = 'A4', autoPrint = true) {
-  const w = window.open('', '_blank');
-  if (!w) return notify('Izinkan pop-up browser untuk mencetak / menyimpan PDF invoice.');
-
-  const itemsRows = (s.items || []).map((it, idx) => {
-    const sellPrice = Number(it.selling_unit_price || it.unit_price);
-    return `
-    <tr>
-      <td style="text-align:center">${idx + 1}</td>
-      <td><b>${esc(it.sku)}</b></td>
-      <td>${esc(it.name)}</td>
-      <td style="text-align:center">${esc(it.panjang || '—')}</td>
-      <td style="text-align:center"><b>${it.quantity}</b></td>
-      <td class="num">${rupiah(it.unit_price)}</td>
-      <td class="num">${rupiah(sellPrice)}</td>
-      <td class="num"><b>${rupiah(it.line_total)}</b></td>
-    </tr>
-  `;
-  }).join('');
-
-  const docTitle = `Invoice-${s.invoice_no}`;
-
-  w.document.write(`<!doctype html>
-<html lang="id">
-<head>
-<meta charset="utf-8">
-<title>${esc(docTitle)}</title>
-<style>
-  @page { size: A4 portrait; margin: 15mm; }
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #182330; margin: 0; padding: 20px; font-size: 11px; }
-  .inv-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #071a2b; padding-bottom: 14px; margin-bottom: 14px; }
-  .inv-brand { display: flex; align-items: center; gap: 10px; }
-  .inv-logo { width: 155px; height: 58px; object-fit: cover; object-position: center; }
-  .inv-mark { width: 32px; height: 32px; background: #071a2b; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 2px; }
-  .inv-mark i { width: 3px; height: 16px; background: #f5c518; border-radius: 1px; }
-  .inv-comp h2 { margin: 0; font-size: 16px; font-weight: 800; color: #071a2b; letter-spacing: 0.5px; }
-  .inv-comp p { margin: 2px 0 0; font-size: 10px; color: #687786; }
-  .inv-right { text-align: right; }
-  .inv-right h1 { margin: 0 0 4px; font-size: 22px; font-weight: 800; color: #071a2b; }
-  .inv-right .no { font-size: 12px; font-weight: 700; color: #2d3748; }
-  .inv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; }
-  .inv-grid div { display: flex; flex-direction: column; gap: 2px; }
-  .inv-grid small { font-size: 9px; text-transform: uppercase; color: #718096; font-weight: 600; }
-  .inv-grid b { font-size: 11px; color: #1a202c; }
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
-  th { background: #f1f5f9; padding: 8px 6px; text-align: left; font-size: 10px; border-bottom: 1px solid #cbd5e1; }
-  td { padding: 8px 6px; border-bottom: 1px solid #e2e8f0; }
-  td.num, th.num { text-align: right; }
-  .totals-wrap { display: flex; justify-content: flex-end; margin-top: 14px; }
-  .totals-box { width: 280px; }
-  .tot-line { display: flex; justify-content: space-between; padding: 3px 0; }
-  .tot-line.grand { font-size: 14px; font-weight: 800; border-top: 2px solid #071a2b; margin-top: 6px; padding-top: 6px; color: #071a2b; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 10px; }
-  .badge.paid { background: #e6f7ec; color: #117335; border: 1px solid #b7ebc6; }
-  .badge.pending { background: #fef7e6; color: #b7791f; border: 1px solid #fbd38d; }
-  .badge.cancelled { background: #feebed; color: #c53030; border: 1px solid #feb2b2; }
-  .footer { margin-top: 30px; border-top: 1px dashed #cbd5e1; padding-top: 10px; font-size: 10px; color: #718096; text-align: center; }
-  .no-print-bar { background: #071a2b; color: #fff; padding: 10px 16px; border-radius: 6px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
-  .no-print-bar button { background: #f5c518; color: #071a2b; border: 0; padding: 6px 14px; border-radius: 4px; font-weight: 700; cursor: pointer; }
-  @media print {
-    .no-print-bar { display: none; }
-    body { padding: 0; }
+  const tab = window.open('about:blank', '_blank');
+  if (!tab) return notify('Izinkan pop-up browser untuk membuka WhatsApp.');
+  try {
+    const result = await getInvoicePdfLink(s);
+    const message = 'Halo ' + (s.customer_name || 'Pelanggan') +
+      ', berikut invoice Howell ' + s.invoice_no + ': ' + result.url;
+    tab.opener = null;
+    tab.location.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(message);
+    notify('Pesan WhatsApp siap dengan tautan PDF invoice.');
+  } catch (error) {
+    tab.close();
+    notify(error.message);
   }
-</style>
-</head>
-<body>
-  <div class="no-print-bar">
-    <span><b>Preview Cetak & Simpan PDF:</b> ${esc(s.invoice_no)}</span>
-    <button onclick="window.print()">🖨 Cetak Sekarang / Simpan PDF</button>
-  </div>
-
-  <div class="inv-header">
-    <div class="inv-brand">
-      <img class="inv-logo" src="${window.location.origin}${appUrl('/assets/howell-logo.png')}" alt="Logo Howell">
-      <div class="inv-comp">
-        <h2>HOWELL OFFICIAL STORE</h2>
-        <p>PT Howell Niaga Indonesia · Exhibition Store</p>
-      </div>
-    </div>
-    <div class="inv-right">
-      <h1>INVOICE</h1>
-      <div class="no">${esc(s.invoice_no)}</div>
-      <div style="font-size:10px;color:#718096;margin-top:2px">${timeFmt(s.sold_at)} WIB</div>
-    </div>
-  </div>
-
-  <div class="inv-grid">
-    <div>
-      <small>Kasir yang Memproses</small>
-      <b>${esc(s.cashier_name || s.user_name || 'Admin')} (ID: ${s.cashier_id || 1})</b>
-    </div>
-    <div>
-      <small>Pelanggan</small>
-      <b>${esc(s.customer_name || 'Pelanggan')}</b>
-    </div>
-    <div>
-      <small>No. WhatsApp</small>
-      <b>${esc(s.customer_phone || '—')}</b>
-    </div>
-    <div>
-      <small>Metode Pembayaran</small>
-      <b>${esc(s.payment_method)}</b>
-    </div>
-    <div>
-      <small>Status Pembayaran</small>
-      <div><span class="badge ${s.payment_status === 'LUNAS' ? 'paid' : s.payment_status === 'MENUNGGU_PEMBAYARAN' ? 'pending' : 'cancelled'}">${esc(s.payment_status)}</span></div>
-    </div>
-    <div>
-      <small>Referensi / Approval Code</small>
-      <b>${esc(s.payment_ref || '—')}</b>
-    </div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th style="width:30px;text-align:center">NO</th>
-        <th style="width:90px">SKU</th>
-        <th>NAMA BARANG</th>
-        <th style="width:70px;text-align:center">PANJANG</th>
-        <th style="width:50px;text-align:center">QTY</th>
-        <th class="num" style="width:100px">HARGA ASLI</th>
-        <th class="num" style="width:110px">HARGA JUAL / PCS</th>
-        <th class="num" style="width:120px">JUMLAH</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${itemsRows}
-    </tbody>
-  </table>
-
-  <div class="totals-wrap">
-    <div class="totals-box">
-      <div class="tot-line">
-        <span>Subtotal:</span>
-        <b>${rupiah(s.subtotal)}</b>
-      </div>
-      ${s.discount > 0 ? `
-        <div class="tot-line" style="color:#c53030">
-          <span>${s.discount_rate ? `Diskon ${s.discount_rate}%:` : 'Diskon:'}</span>
-          <b>- ${rupiah(s.discount)}</b>
-        </div>
-      ` : ''}
-      <div class="tot-line grand">
-        <span>TOTAL:</span>
-        <span>${rupiah(s.total)}</span>
-      </div>
-      ${s.payment_method === 'Tunai' ? `
-        <div class="tot-line" style="font-size:10px">
-          <span>Uang Diterima:</span>
-          <span>${rupiah(s.amount_paid || s.total)}</span>
-        </div>
-        <div class="tot-line" style="font-size:10px">
-          <span>Kembalian:</span>
-          <span>${rupiah(s.change_amount || 0)}</span>
-        </div>
-      ` : ''}
-    </div>
-  </div>
-
-  <div class="footer">
-    <p>Terima kasih atas pembelian Anda di Howell Official Store. Bukti transaksi ini sah dan dikeluarkan secara sistem oleh Howell StockFlow.</p>
-  </div>
-</body>
-</html>`);
-  w.document.close();
-  w.focus();
-  if (autoPrint) setTimeout(() => w.print(), 350);
-  return w;
 }
 
 /* ==================== RIWAYAT PENJUALAN ==================== */
@@ -980,7 +750,7 @@ async function loadSales() {
       try {
         await api(`/api/sales/${id}/confirm-payment`, {
           method: 'POST',
-          body: JSON.stringify({ payment_ref: ref.trim(), user_name: activeUser.name })
+          body: JSON.stringify({ payment_ref: ref.trim(), user_name: activeCashier.name })
         });
         notify('Pembayaran transaksi berhasil dikonfirmasi LUNAS.');
         loadSales();
@@ -1001,7 +771,7 @@ async function loadSales() {
       try {
         await api(`/api/sales/${id}/cancel`, {
           method: 'POST',
-          body: JSON.stringify({ reason: reason.trim(), user_name: activeUser.name, cashier_id: activeUser.id })
+          body: JSON.stringify({ reason: reason.trim(), user_name: activeCashier.name, cashier_id: activeCashier.id })
         });
         notify('Transaksi dibatalkan. Stok barang berhasil dikembalikan.');
         loadSales();
@@ -1447,7 +1217,7 @@ async function loadClosing() {
     const todayStr = dateWib();
     if ($('#closeDate') && !$('#closeDate').value) $('#closeDate').value = todayStr;
     const date = $('#closeDate')?.value || todayStr;
-    const cashierId = $('#closeCashierSelect')?.value || activeUser.id;
+    const cashierId = $('#closeCashierSelect')?.value || allUsers[0]?.id || activeCashier.id;
 
     const data = await api(`/api/reconciliation?date=${encodeURIComponent(date)}&cashier_id=${encodeURIComponent(cashierId)}`);
     const methods = data.methods || [];
@@ -1475,7 +1245,7 @@ async function loadClosing() {
       if ($('#actCredit')) $('#actCredit').value = data.closing.actual_credit_bca;
       if ($('#closeOpeningCash')) $('#closeOpeningCash').value = data.closing.opening_cash;
       if ($('#closeNotes')) $('#closeNotes').value = data.closing.notes || '';
-      if ($('#closeReconciledBy')) $('#closeReconciledBy').value = data.closing.reconciled_by || activeUser.name;
+      if ($('#closeReconciledBy')) $('#closeReconciledBy').value = data.closing.reconciled_by || activeCashier.name;
     }
 
     calculateClosingVariance();
@@ -1548,8 +1318,9 @@ $('#btnSaveClosing')?.addEventListener('click', async () => {
   const date = $('#closeDate')?.value;
   if (!date) return notify('Pilih tanggal operasional.');
 
-  const cashierId = Number($('#closeCashierSelect')?.value || activeUser.id);
-  const selectedCashier = allUsers.find(u => u.id === cashierId) || activeUser;
+  const cashierId = Number($('#closeCashierSelect')?.value || activeCashier.id);
+  const selectedCashier = allUsers.find(u => u.id === cashierId) || allUsers[0];
+  if (!selectedCashier) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
   const openingCash = Math.max(0, Number($('#closeOpeningCash')?.value || 0));
 
   const actCash = Number($('#actCash')?.value || 0);
@@ -1589,7 +1360,7 @@ $('#btnSaveClosing')?.addEventListener('click', async () => {
         system_credit_bca: systemClosingTotals.credit,
         actual_credit_bca: actCredit,
         notes,
-        reconciled_by: $('#closeReconciledBy')?.value.trim() || activeUser.name
+        reconciled_by: $('#closeReconciledBy')?.value.trim() || activeCashier.name
       })
     });
 
@@ -2024,7 +1795,7 @@ async function verifyProduct(p) {
   try {
     await api(`/api/products/${p.id}/verify`, {
       method: 'POST',
-      body: JSON.stringify({ actual_stock: quantity, reason, user_name: activeUser.name })
+      body: JSON.stringify({ actual_stock: quantity, reason, user_name: activeCashier.name })
     });
     notify('Verifikasi tersimpan; riwayat dan penyesuaian ledger tercatat.');
     loadVerification();
