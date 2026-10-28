@@ -222,6 +222,7 @@ function modal(title, body, submitLabel, onSubmit) {
 
 /* ==================== POS / KASIR / SCAN ==================== */
 const cart = new Map();
+let saleSubmissionInProgress = false;
 
 function roundedDiscountUnitPrice(originalPrice, discountRate) {
   const price = BigInt(originalPrice);
@@ -422,6 +423,7 @@ $('#clearCart')?.addEventListener('click', () => {
 });
 
 $('#completeSale')?.addEventListener('click', async () => {
+  if (saleSubmissionInProgress) return;
   const items = [...cart.values()];
   if (!items.length) return notify('Keranjang belanja masih kosong.');
 
@@ -453,6 +455,12 @@ $('#completeSale')?.addEventListener('click', async () => {
 
   if (!confirm(confirmMsg)) return;
 
+  saleSubmissionInProgress = true;
+  const submitButton = $('#completeSale');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Menyimpan transaksi…';
+  }
   try {
     const created = await api('/api/sales', {
       method: 'POST',
@@ -490,6 +498,12 @@ $('#completeSale')?.addEventListener('click', async () => {
     loadDashboard();
   } catch (e) {
     notify(e.message);
+  } finally {
+    saleSubmissionInProgress = false;
+    if (submitButton?.isConnected) {
+      submitButton.textContent = 'Selesaikan & Terbitkan Invoice';
+      submitButton.disabled = cart.size === 0;
+    }
   }
 });
 
@@ -1213,7 +1227,7 @@ $('#btnCetakRekapHarian')?.addEventListener('click', () => {
 /* ==================== PENUTUPAN KASIR HARIAN ==================== */
 let systemClosingTotals = { cash: 0, qris: 0, debit: 0, credit: 0, total: 0 };
 
-async function loadClosing() {
+async function loadClosing({ preserveInputs = false } = {}) {
   try {
     const todayStr = dateWib();
     if ($('#closeDate') && !$('#closeDate').value) $('#closeDate').value = todayStr;
@@ -1239,7 +1253,7 @@ async function loadClosing() {
     if ($('#sysTotalDisp')) $('#sysTotalDisp').innerHTML = `<b>${rupiah(systemClosingTotals.total)}</b>`;
 
     // If already closed, prefill actual values
-    if (data.closing) {
+    if (data.closing && !preserveInputs) {
       if ($('#actCash')) $('#actCash').value = data.closing.actual_cash;
       if ($('#actQris')) $('#actQris').value = data.closing.actual_qris;
       if ($('#actDebit')) $('#actDebit').value = data.closing.actual_debit_bca;
@@ -1446,12 +1460,10 @@ async function loadDashboard() {
     const d = await api('/api/dashboard');
     if ($('#statProducts')) $('#statProducts').textContent = d.products.toLocaleString('id-ID');
     if ($('#statUnits')) $('#statUnits').textContent = d.units.toLocaleString('id-ID');
+    if ($('#statTodaySales')) $('#statTodaySales').textContent = rupiah(d.today_sales_total);
+    if ($('#statTodayCount')) $('#statTodayCount').textContent = `${Number(d.today_sales_count || 0).toLocaleString('id-ID')} transaksi tercatat hari ini`;
     if ($('#statLow')) $('#statLow').textContent = d.low_stock.toLocaleString('id-ID');
     if ($('#statVerify')) $('#statVerify').textContent = d.source_flagged_count.toLocaleString('id-ID');
-    if ($('#statMoves')) {
-      const todayMoves = d.movements.filter(m => new Date(String(m.created_at).replace(' ', 'T') + 'Z').toDateString() === new Date().toDateString());
-      $('#statMoves').textContent = todayMoves.length.toLocaleString('id-ID');
-    }
 
     if ($('#lowRows')) {
       $('#lowRows').innerHTML = d.lowProducts.length ? d.lowProducts.map(p => `
@@ -1835,6 +1847,34 @@ $('#movementSearch')?.addEventListener('input', e => {
   const filtered = q ? cachedMovements.filter(m => `${m.sku} ${m.name} ${m.reference} ${m.note} ${m.location}`.toLowerCase().includes(q)) : cachedMovements;
   renderMovementRows(filtered);
 });
+
+/* ==================== LIVE DATA REFRESH ==================== */
+let liveRefreshRunning = false;
+
+async function refreshVisiblePage() {
+  if (document.hidden || liveRefreshRunning || $('#modalHost')?.querySelector('.modal')) return;
+  const page = document.querySelector('.page:not(.hidden)')?.id?.replace(/Page$/, '');
+  const refreshers = {
+    dashboard: loadDashboard,
+    sales: loadSales,
+    reconciliation: () => loadReconciliation(),
+    closing: () => loadClosing({ preserveInputs: true }),
+    products: () => loadProducts($('#productSearch')?.value || ''),
+    verification: loadVerification,
+    movements: loadMovements
+  };
+  const refresh = refreshers[page];
+  if (!refresh) return;
+  liveRefreshRunning = true;
+  try { await refresh(); }
+  finally { liveRefreshRunning = false; }
+}
+
+setInterval(refreshVisiblePage, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshVisiblePage();
+});
+window.addEventListener('focus', refreshVisiblePage);
 
 /* ==================== INISIALISASI APLIKASI ==================== */
 (async function init() {
