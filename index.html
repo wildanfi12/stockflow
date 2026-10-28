@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Howell StockFlow — Inventory, POS & Rekonsiliasi</title>
-  <link rel="stylesheet" href="./styles.css?v=auth-20261028">
+  <link rel="stylesheet" href="./styles.css?v=release-roles-pricing-20261028">
 </head>
 <body>
   <section class="auth-gate" id="authGate" aria-labelledby="authTitle">
@@ -86,7 +86,7 @@
       </div>
       <div class="header-btns">
         <button class="button secondary" data-page="reconciliation"><span>⚖</span> Rekonsiliasi Hari Ini</button>
-        <button class="button primary" data-action="new-stock">＋ <span>Catat pergerakan</span></button>
+        <button class="button primary" data-action="new-stock" data-admin-only>＋ <span>Catat pergerakan</span></button>
       </div>
     </div>
     <div class="stat-grid">
@@ -625,7 +625,7 @@
       <div class="header-btns">
         <button class="button secondary" data-page="import">⇧ <span>Impor Excel</span></button>
         <button class="button secondary" id="exportProducts">⤓ <span>Ekspor CSV</span></button>
-        <button class="button primary" data-action="add-product">＋ <span>Tambah produk</span></button>
+        <button class="button primary" data-action="add-product" data-admin-only>＋ <span>Tambah produk</span></button>
       </div>
     </div>
     <section class="panel">
@@ -707,7 +707,7 @@
           <select id="duplicatePolicy"><option value="skip">Lewati SKU duplikat, jangan timpa data</option></select>
         </div>
         <div class="import-action">
-          <button class="button primary" id="commitImport">Konfirmasi impor</button>
+          <button class="button primary" id="commitImport" data-admin-only>Konfirmasi impor</button>
         </div>
       </div>
     </section>
@@ -777,7 +777,7 @@
         <h1>Pergerakan stok</h1>
         <p>Riwayat barang masuk, keluar, penjualan, dan penyesuaian stok.</p>
       </div>
-      <button class="button primary" data-action="new-stock">＋ <span>Catat pergerakan</span></button>
+      <button class="button primary" data-action="new-stock" data-admin-only>＋ <span>Catat pergerakan</span></button>
     </div>
     <section class="panel">
       <div class="toolbar">
@@ -803,6 +803,6 @@
 <div id="modalHost"></div>
 <div id="toast" class="toast"></div>
 
-<script src="./app-v2.js?v=auth-20261028"></script>
+<script src="./app-v2.js?v=release-roles-pricing-20261028"></script>
 </body>
 </html>

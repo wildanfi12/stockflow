@@ -10,6 +10,11 @@ if (window.location.hostname.endsWith('github.io')) {
 }
 
 let authenticatedUser = null;
+const isAdminUser = () => authenticatedUser?.role === 'admin';
+function applyRoleRestrictions() {
+  $$('[data-admin-only]').forEach(element => { element.hidden = !isAdminUser(); });
+}
+
 function showLoginGate(message = '') {
   const gate = $('#authGate');
   if (gate) gate.hidden = false;
@@ -23,6 +28,7 @@ function showLoginGate(message = '') {
 function hideLoginGate(user) {
   authenticatedUser = user;
   activeUser = user;
+  applyRoleRestrictions();
   if ($('#authGate')) $('#authGate').hidden = true;
   if ($('#authLogoutButton')) $('#authLogoutButton').hidden = false;
   if ($('#authChangePasswordButton')) $('#authChangePasswordButton').hidden = false;
@@ -383,9 +389,7 @@ function renderCart() {
           <span style="font-weight:700;padding:0 4px">${x.quantity}</span>
           <button class="qty-action" data-qty="${x.id}" data-delta="1">+</button>
         </td>
-        <td>
-          <input class="cart-price" type="number" min="0" step="1000" data-price="${x.id}" value="${x.unit_price}" aria-label="Harga satuan ${esc(x.sku)}">
-        </td>
+        <td><b>${rupiah(x.unit_price)}</b></td>
         <td><b>${rupiah(roundedDiscountUnitPrice(x.unit_price, discountRate))}</b></td>
         <td><b>${rupiah(roundedDiscountUnitPrice(x.unit_price, discountRate) * x.quantity)}</b></td>
         <td><button class="row-action" data-remove="${x.id}" aria-label="Hapus ${esc(x.sku)}">×</button></td>
@@ -403,17 +407,6 @@ function renderCart() {
 
   $$('[data-remove]').forEach(b => b.onclick = () => {
     cart.delete(Number(b.dataset.remove));
-    renderCart();
-  });
-
-  $$('[data-price]').forEach(i => i.onchange = () => {
-    const x = cart.get(Number(i.dataset.price)), v = Number(i.value);
-    if (!Number.isSafeInteger(v) || v < 0) {
-      notify('Harga harus berupa nominal bulat 0 atau lebih.');
-      i.value = x.unit_price;
-      return;
-    }
-    x.unit_price = v;
     renderCart();
   });
 
@@ -446,10 +439,15 @@ async function scan() {
       notify('Stok produk di sistem sudah habis.');
       return;
     }
+    const initPrice = p.sale_price > 0 ? p.sale_price : (p.source_unit_price || 0);
+    if (!Number.isSafeInteger(initPrice) || initPrice <= 0) {
+      $('#scanResult').innerHTML = `<div class="verify-warn">Harga jual SKU ${esc(p.sku)} belum tersedia. Minta Admin melengkapi katalog sebelum transaksi.</div>`;
+      notify('Harga produk belum tersedia; transaksi diblokir.');
+      return;
+    }
     if (item) {
       item.quantity++;
     } else {
-      const initPrice = p.sale_price > 0 ? p.sale_price : (p.source_unit_price || 0);
       cart.set(p.id, {
         id: p.id,
         sku: p.sku,
@@ -1635,12 +1633,7 @@ async function loadProducts(q = '') {
           <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_unit_price) : '<span class="muted">—</span>'}</td>
           <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_total) : '<span class="muted">—</span>'}</td>
           <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_discount_value) : '<span class="muted">—</span>'}</td>
-          <td>
-            <div class="row-actions-group">
-              <button class="edit-btn" title="Edit produk" data-edit="${p.id}">Edit</button>
-              <button class="row-action" title="Arsipkan produk" data-archive="${p.id}">×</button>
-            </div>
-          </td>
+          <td>${isAdminUser() ? `<div class="row-actions-group"><button class="edit-btn" title="Edit produk" data-edit="${p.id}">Edit</button><button class="row-action" title="Arsipkan produk" data-archive="${p.id}">×</button></div>` : '<span class="muted">—</span>'}</td>
         </tr>`).join('') : '<tr><td colspan="9" class="empty-row">Belum ada produk sesuai filter.</td></tr>';
     }
 
@@ -1882,7 +1875,7 @@ async function loadVerification() {
           <td>${p.stock} ${esc(p.unit)}</td>
           <td>${esc(p.stock_location)}</td>
           <td>${statusChip(p.stock_verification_status)}</td>
-          <td><button class="button secondary" data-verify="${p.id}">Verifikasi</button></td>
+          <td>${isAdminUser() ? `<button class="button secondary" data-verify="${p.id}">Verifikasi</button>` : '<span class="muted">—</span>'}</td>
         </tr>`).join('') : '<tr><td colspan="6" class="empty-row">Tidak ada SKU yang menunggu verifikasi fisik.</td></tr>';
     }
 

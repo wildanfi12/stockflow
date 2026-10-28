@@ -222,6 +222,12 @@ const send = (res, status, body, type = 'application/json; charset=utf-8') => {
   res.end(payload);
 };
 
+function requireAdmin(req, res, message = 'Perubahan ini hanya dapat dilakukan administrator.') {
+  if (req.authUser?.role === 'admin') return true;
+  send(res, 403, { error: message });
+  return false;
+}
+
 function makeInvoicePdf(sale, items) {
   const pageWidth = 595;
   const pageHeight = 842;
@@ -823,12 +829,19 @@ const server = http.createServer(async (req, res) => {
 
           const prepared = [];
           for (const item of items) {
-            const id = Number(item.product_id), qty = Number(item.quantity), price = Number(item.unit_price);
-            if (!Number.isInteger(id) || !Number.isInteger(qty) || qty < 1 || !Number.isSafeInteger(price) || price < 0) {
-              throw new Error('Jumlah unit dan harga produk harus berupa nominal yang valid.');
+            const id = Number(item.product_id), qty = Number(item.quantity);
+            if (!Number.isInteger(id) || !Number.isInteger(qty) || qty < 1) {
+              throw new Error('Produk dan jumlah unit harus valid.');
             }
             const p = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(id);
             if (!p) throw new Error(`Produk dengan ID ${id} tidak ditemukan atau sudah tidak aktif.`);
+            const price = Number(p.sale_price > 0 ? p.sale_price : (p.source_unit_price ?? 0));
+            if (!Number.isSafeInteger(price) || price <= 0) {
+              throw new Error(`Harga jual SKU ${p.sku} belum tersedia. Lengkapi harga produk sebelum transaksi.`);
+            }
+            if (item.unit_price !== undefined && (!Number.isSafeInteger(Number(item.unit_price)) || Number(item.unit_price) !== price)) {
+              throw new Error(`Harga SKU ${p.sku} berubah atau tidak sesuai katalog. Muat ulang produk sebelum melanjutkan.`);
+            }
             const existing = prepared.find(x => x.p.id === id);
             if (existing) {
               existing.qty += qty;
@@ -1348,6 +1361,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if ((req.method === 'PUT' || req.method === 'POST') && prodDetailMatch && !url.pathname.endsWith('/verify')) {
+        if (!requireAdmin(req, res, 'Perubahan produk dan harga hanya dapat dilakukan administrator.')) return;
         const id = Number(prodDetailMatch[1]);
         const p = await readBody(req);
         const barcode = String(p.barcode || '').trim() || null;
@@ -1366,7 +1380,7 @@ const server = http.createServer(async (req, res) => {
         const location = p.location !== undefined ? String(p.location).trim() : existing.location;
         const stockLocation = p.stock_location !== undefined ? String(p.stock_location).trim() : existing.stock_location;
 
-        if (!Number.isSafeInteger(refPrice) || refPrice < 0 || !Number.isSafeInteger(salePrice) || salePrice < 0 || !Number.isInteger(minStock) || minStock < 0) {
+        if (!Number.isSafeInteger(refPrice) || refPrice < 0 || !Number.isSafeInteger(salePrice) || salePrice < 0 || !Number.isSafeInteger(minStock) || minStock < 0) {
           return send(res, 400, { error: 'Harga dan stok minimum harus bilangan bulat ≥ 0.' });
         }
 
@@ -1390,18 +1404,21 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/products') {
+        if (!requireAdmin(req, res, 'Penambahan produk dan stok awal hanya dapat dilakukan administrator.')) return;
         const p = await readBody(req), barcode = String(p.barcode || '').trim() || null;
         if (!p.sku?.trim() || !p.name?.trim()) return send(res, 400, { error: 'SKU dan nama produk wajib diisi.' });
         if (barcode && !validEAN(barcode)) return send(res, 400, { error: 'Barcode harus berupa EAN-13 dengan check digit yang valid.' });
         const qty = Number(p.stock || 0);
-        if (!Number.isInteger(qty) || qty < 0) return send(res, 400, { error: 'Stok harus berupa bilangan bulat nol atau lebih.' });
+        if (!Number.isSafeInteger(qty) || qty < 0) return send(res, 400, { error: 'Stok harus berupa bilangan bulat aman nol atau lebih.' });
         const rp = Number(p.reference_price || 0), sp = Number(p.sale_price || 0);
         if (!Number.isSafeInteger(rp) || rp < 0 || !Number.isSafeInteger(sp) || sp < 0) return send(res, 400, { error: 'Harga harus berupa Rupiah bulat nol atau lebih.' });
+        const minStock = Number(p.min_stock || 0);
+        if (!Number.isSafeInteger(minStock) || minStock < 0) return send(res, 400, { error: 'Stok minimum harus berupa bilangan bulat aman nol atau lebih.' });
 
         db.exec('BEGIN IMMEDIATE');
         try {
           const result = db.prepare(`INSERT INTO products(sku,barcode,name,category,unit,panjang,reference_price,sale_price,stock,min_stock,location,stock_location) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
-            .run(p.sku.trim(), barcode, p.name.trim(), p.category || '', p.unit || 'pcs', p.panjang || '', rp, sp, qty, Number(p.min_stock || 0), p.location || '', p.stock_location || 'Gudang utama');
+            .run(p.sku.trim(), barcode, p.name.trim(), p.category || '', p.unit || 'pcs', p.panjang || '', rp, sp, qty, minStock, p.location || '', p.stock_location || 'Gudang utama');
           if (qty) {
             db.prepare("INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,'opening',?,?,'SALDO-AWAL','Saldo awal dari pembuatan produk',?,?)")
               .run(result.lastInsertRowid, qty, qty, p.stock_location || 'Gudang utama', req.authUser.name);
@@ -1415,8 +1432,10 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      if (req.method === 'DELETE' && url.pathname.startsWith('/api/products/')) {
-        const id = Number(url.pathname.split('/').pop());
+      const productDeleteMatch = url.pathname.match(/^\/api\/products\/(\d+)$/);
+      if (req.method === 'DELETE' && productDeleteMatch) {
+        if (!requireAdmin(req, res, 'Pengarsipan produk hanya dapat dilakukan administrator.')) return;
+        const id = Number(productDeleteMatch[1]);
         const used = db.prepare('SELECT 1 FROM inventory_movements WHERE product_id=? LIMIT 1').get(id);
         if (used) db.prepare('UPDATE products SET active=0 WHERE id=?').run(id);
         else db.prepare('DELETE FROM products WHERE id=?').run(id);
@@ -1457,8 +1476,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/movements') {
+        if (!requireAdmin(req, res, 'Pergerakan stok manual hanya dapat dicatat administrator.')) return;
         const m = await readBody(req), qty = Number(m.quantity), kind = m.kind;
-        if (!Number.isInteger(m.product_id) || !Number.isInteger(qty) || qty <= 0 || !['in', 'out', 'adjustment'].includes(kind)) {
+        if (!Number.isSafeInteger(m.product_id) || !Number.isSafeInteger(qty) || qty <= 0 || !['in', 'out', 'adjustment'].includes(kind)) {
           return send(res, 400, { error: 'Produk, jenis, dan jumlah pergerakan wajib valid.' });
         }
         db.exec('BEGIN IMMEDIATE');
@@ -1466,6 +1486,7 @@ const server = http.createServer(async (req, res) => {
           const p = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(m.product_id);
           if (!p) { db.exec('ROLLBACK'); return send(res, 404, { error: 'Produk tidak ditemukan.' }); }
           const balance = kind === 'in' ? p.stock + qty : p.stock - qty;
+          if (!Number.isSafeInteger(balance)) { db.exec('ROLLBACK'); return send(res, 400, { error: 'Jumlah pergerakan melebihi batas stok integer yang didukung.' }); }
           if (balance < 0) { db.exec('ROLLBACK'); return send(res, 409, { error: `Stok tidak mencukupi. Stok saat ini ${p.stock} ${p.unit}.` }); }
           db.prepare('UPDATE products SET stock=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(balance, p.id);
           db.prepare('INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,?,?,?,?,?,?,?)').run(p.id, kind, qty, balance, (m.reference || '').trim() || 'STK-' + Date.now(), m.note || '', p.stock_location, req.authUser.name);
@@ -1487,6 +1508,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/import/commit') {
+        if (!requireAdmin(req, res, 'Penerapan impor Excel hanya dapat dilakukan administrator.')) return;
         const data = await readBody(req), b = latestBatch();
         if (!b || b.status !== 'PREVIEW_PENDING') return send(res, 409, { error: 'Tidak ada pratinjau impor yang menunggu konfirmasi.' });
         if (!['opening', 'exhibition', 'catalog_only'].includes(data.mode)) return send(res, 400, { error: 'Pilih mode impor terlebih dahulu.' });
@@ -1537,6 +1559,7 @@ const server = http.createServer(async (req, res) => {
 
       const verifyMatch = url.pathname.match(/^\/api\/products\/(\d+)\/verify$/);
       if (req.method === 'POST' && verifyMatch) {
+        if (!requireAdmin(req, res, 'Verifikasi dan penyesuaian stok hanya dapat dilakukan administrator.')) return;
         const data = await readBody(req), id = Number(verifyMatch[1]), actual = Number(data.actual_stock), user = req.authUser.name, reason = String(data.reason || '').trim();
         if (!Number.isInteger(actual) || actual < 0 || !reason) return send(res, 400, { error: 'Jumlah hasil pemeriksaan harus bilangan bulat ≥ 0 dan alasan wajib diisi.' });
         db.exec('BEGIN IMMEDIATE');
