@@ -639,8 +639,9 @@ async function shareInvoiceWhatsApp(s) {
   if (!tab) return notify('Izinkan pop-up browser untuk membuka WhatsApp.');
   try {
     const result = await getInvoicePdfLink(s);
-    const message = 'Halo ' + (s.customer_name || 'Pelanggan') +
-      ', berikut invoice Howell ' + s.invoice_no + ': ' + result.url;
+    const message = 'Terima kasih, pembayaran Anda telah kami terima.\n\n' +
+      'Invoice Howell StockFlow — ' + s.invoice_no + '\n' +
+      'Lihat atau unduh invoice PDF Anda di sini:\n' + result.url;
     tab.opener = null;
     tab.location.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(message);
     notify('Pesan WhatsApp siap dengan tautan PDF invoice.');
