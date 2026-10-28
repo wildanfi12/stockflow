@@ -7,7 +7,10 @@ Aplikasi inventaris dan kasir pameran Howell. Frontend memakai HTML, CSS, dan Ja
 - Gunakan Node.js 22.5 atau lebih baru.
 - Jalankan `npm start` atau buka `Buka Howell StockFlow.bat` di Windows.
 - Buka `http://127.0.0.1:3001/`.
-- Database operasional berada di `data/howell-stockflow.db` dan tidak disertakan ke Git.
+- Database operasional disimpan pada `DATA_DIR` dan tidak disertakan ke Git. Pada pengembangan lokal, direktori defaultnya `data/`.
+- File data sumber produk lokal juga dikecualikan dari Git; backend menyajikan sumber yang tersedia di `DATA_DIR` hanya setelah login.
+- API operasional memerlukan akun StockFlow; cookie sesi bersifat `HttpOnly`, `SameSite=Strict`, dan berlaku 12 jam. Untuk deployment publik, isi `PUBLIC_BASE_URL` dengan origin HTTPS yang benar.
+- Akun kasir mengikuti nama pengguna masing-masing; backend mengikat penjualan dan rekonsiliasi kasir pada akun yang sedang login. Reset kata sandi dilakukan melalui skrip administrator `scripts/set-user-passwords.js` dengan file kredensial privat.
 
 ## Fitur utama
 

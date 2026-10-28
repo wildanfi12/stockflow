@@ -9,6 +9,29 @@ if (window.location.hostname.endsWith('github.io')) {
   if (notice) notice.hidden = false;
 }
 
+let authenticatedUser = null;
+function showLoginGate(message = '') {
+  const gate = $('#authGate');
+  if (gate) gate.hidden = false;
+  const error = $('#authError');
+  if (error) { error.textContent = message; error.hidden = !message; }
+  $('#authLogoutButton')?.setAttribute('hidden', '');
+  $('#authChangePasswordButton')?.setAttribute('hidden', '');
+  if ($('#authAccountName')) $('#authAccountName').hidden = true;
+  setTimeout(() => $('#authUsername')?.focus(), 0);
+}
+function hideLoginGate(user) {
+  authenticatedUser = user;
+  activeUser = user;
+  if ($('#authGate')) $('#authGate').hidden = true;
+  if ($('#authLogoutButton')) $('#authLogoutButton').hidden = false;
+  if ($('#authChangePasswordButton')) $('#authChangePasswordButton').hidden = false;
+  if ($('#authAccountName')) {
+    $('#authAccountName').textContent = `${user.name} · ${user.role === 'admin' ? 'Admin' : 'Kasir'}`;
+    $('#authAccountName').hidden = false;
+  }
+}
+
 function timeFmt(s) {
   if (!s) return '—';
   try {
@@ -43,9 +66,51 @@ async function api(url, options = {}) {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401 && !url.includes('/api/auth/login')) showLoginGate(data.error || 'Sesi berakhir. Silakan masuk kembali.');
   if (!response.ok) throw new Error(data.error || 'Permintaan gagal diproses.');
   return data;
 }
+
+$('#authForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const submit = $('#authSubmit'), error = $('#authError');
+  submit.disabled = true;
+  error.hidden = true;
+  try {
+    const user = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: $('#authUsername').value, password: $('#authPassword').value })
+    });
+    $('#authPassword').value = '';
+    hideLoginGate(user);
+    await initUsers();
+    loadDashboard();
+  } catch (e) {
+    error.textContent = e.message;
+    error.hidden = false;
+    $('#authPassword').focus();
+  } finally { submit.disabled = false; }
+});
+
+$('#authLogoutButton')?.addEventListener('click', async () => {
+  if (!confirm('Keluar dari akun StockFlow pada perangkat ini?')) return;
+  try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); window.location.reload(); }
+  catch (e) { notify(e.message); }
+});
+
+$('#authChangePasswordButton')?.addEventListener('click', async () => {
+  const current = prompt('Masukkan kata sandi saat ini:');
+  if (current === null) return;
+  const next = prompt('Masukkan kata sandi baru (minimal 12 karakter):');
+  if (next === null) return;
+  const confirmNext = prompt('Ulangi kata sandi baru:');
+  if (confirmNext === null) return;
+  if (next !== confirmNext) return notify('Kata sandi baru tidak sama.');
+  try {
+    await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: current, new_password: next }) });
+    notify('Kata sandi berhasil diperbarui.');
+  } catch (e) { notify(e.message); }
+});
 
 let toastTimer;
 function notify(message) {
@@ -66,7 +131,9 @@ async function initUsers() {
   try {
     allUsers = await api('/api/users');
     const savedId = Number(localStorage.getItem('howell_active_cashier_id'));
-    activeCashier = allUsers.find(u => u.id === savedId && u.active) || allUsers[0] || activeCashier;
+    activeCashier = authenticatedUser?.role === 'kasir'
+      ? (allUsers.find(u => u.id === authenticatedUser.id) || allUsers[0] || activeCashier)
+      : (allUsers.find(u => u.id === savedId && u.active) || allUsers[0] || activeCashier);
     updateUserDisplay();
     populateCashierSelects();
   } catch (e) {
@@ -87,7 +154,8 @@ function updateUserDisplay() {
 }
 
 function populateCashierSelects() {
-  const options = allUsers.map(u =>
+  const visibleUsers = authenticatedUser?.role === 'kasir' ? allUsers.filter(u => u.id === authenticatedUser.id) : allUsers;
+  const options = visibleUsers.map(u =>
     `<option value="${u.id}">${esc(u.name)}</option>`
   ).join('');
   const defaultCashier = allUsers.find(u => u.id === activeCashier.id) || allUsers[0];
@@ -107,6 +175,7 @@ function populateCashierSelects() {
 }
 
 function showUserSwitcherModal() {
+  if (authenticatedUser?.role === 'kasir') return notify('Kasir aktif mengikuti akun login. Untuk berpindah kasir, keluar lalu masuk dengan akun kasir yang sesuai.');
   modal('Ganti Kasir Bertugas', `
     <div style="font-size:12px;color:#556575;margin-bottom:12px">
       Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.
@@ -595,7 +664,7 @@ function showInvoiceModal(s) {
               ${s.discount > 0 ? `<div class="inv-tot-line discount-line"><span>${s.discount_rate ? 'Diskon ' + s.discount_rate + '%' : 'Diskon transaksi'}</span><b>− ${rupiah(s.discount)}</b></div>` : ''}
               <div class="inv-tot-line grand"><span>TOTAL TAGIHAN</span><b>${rupiah(s.total)}</b></div>
               ${s.payment_method === 'Tunai' ? `
-                <div class="inv-tot-line cash-line"><span>Uang diterima</span><span>${rupiah(s.amount_paid || s.total)}</span></div>
+                <div class="inv-tot-line cash-line"><span>Uang diterima</span><span>${rupiah(s.amount_paid ?? s.total)}</span></div>
                 <div class="inv-tot-line cash-line"><span>Kembalian</span><span>${rupiah(s.change_amount || 0)}</span></div>
               ` : ''}
             </div>
@@ -1902,6 +1971,16 @@ window.addEventListener('focus', refreshVisiblePage);
 
 /* ==================== INISIALISASI APLIKASI ==================== */
 (async function init() {
-  await initUsers();
-  loadDashboard();
+  if (window.location.hostname.endsWith('github.io')) {
+    if ($('#authGate')) $('#authGate').hidden = true;
+    return;
+  }
+  try {
+    const user = await api('/api/auth/me');
+    hideLoginGate(user);
+    await initUsers();
+    loadDashboard();
+  } catch {
+    showLoginGate();
+  }
 })();

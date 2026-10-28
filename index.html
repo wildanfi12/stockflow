@@ -4,9 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Howell StockFlow — Inventory, POS & Rekonsiliasi</title>
-  <link rel="stylesheet" href="./styles.css?v=github-pages-path1">
+  <link rel="stylesheet" href="./styles.css?v=auth-20261028">
 </head>
 <body>
+  <section class="auth-gate" id="authGate" aria-labelledby="authTitle">
+    <form class="auth-card" id="authForm" autocomplete="on">
+      <div class="auth-brand"><b>HOWELL</b><span>STOCKFLOW</span></div>
+      <div class="eyebrow">AKSES OPERASIONAL</div>
+      <h1 id="authTitle">Masuk ke StockFlow</h1>
+      <p>Gunakan akun kasir atau administrator yang telah diberikan.</p>
+      <label for="authUsername">Nama akun</label>
+      <input id="authUsername" name="username" autocomplete="username" required maxlength="80" placeholder="Contoh: faiz">
+      <label for="authPassword">Kata sandi</label>
+      <input id="authPassword" name="password" type="password" autocomplete="current-password" required maxlength="256" placeholder="Kata sandi">
+      <div class="auth-error" id="authError" role="alert" hidden></div>
+      <button class="button primary" id="authSubmit" type="submit">Masuk</button>
+      <small>Sesi login berlaku 12 jam pada perangkat ini.</small>
+    </form>
+  </section>
 <aside class="sidebar">
   <div class="brand">
     <div><b>HOWELL</b><span>STOCKFLOW</span></div>
@@ -48,9 +63,12 @@
       <div class="cashier-chip" id="topCashierChip" title="Kasir yang sedang bertugas">
         <span>👤</span><b id="topCashierName">Faiz</b>
       </div>
+      <span class="auth-account" id="authAccountName" hidden></span>
       <div class="date-chip"><span>◷</span><span id="today"></span></div>
       <button class="icon-btn" aria-label="Notifikasi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><i></i></button>
       <div class="top-avatar" id="topAvatar">HW</div>
+      <button class="button secondary auth-logout" id="authChangePasswordButton" type="button" hidden>Ganti sandi</button>
+      <button class="button secondary auth-logout" id="authLogoutButton" type="button" hidden>Keluar</button>
     </div>
   </header>
 
@@ -785,6 +803,6 @@
 <div id="modalHost"></div>
 <div id="toast" class="toast"></div>
 
-<script src="./app-v2.js?v=github-pages-path1"></script>
+<script src="./app-v2.js?v=auth-20261028"></script>
 </body>
 </html>

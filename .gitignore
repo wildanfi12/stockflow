@@ -1,5 +1,13 @@
 node_modules/
 *.db-wal
 *.db-shm
+data/*.db
+data/*.db-*
+data/*.json
+*.pem
+*.key
+*.env
+*.credentials.json
+work/
 .DS_Store
 Thumbs.db

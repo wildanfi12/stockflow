@@ -1,8 +1,10 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomBytes, createHash } = require('node:crypto');
+const { randomBytes, createHash, scrypt: scryptCallback, timingSafeEqual } = require('node:crypto');
+const { promisify } = require('node:util');
 const { DatabaseSync } = require('node:sqlite');
+const scrypt = promisify(scryptCallback);
 
 const root = __dirname;
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
@@ -44,9 +46,21 @@ for (const user of [
     insertUser.run(user.id, user.username, user.name, user.role);
   }
 }
-// Admin is retained as an inactive historical/system account. Only the three
-// assigned cashiers appear as active users in the operational app.
-db.prepare("UPDATE users SET active=0 WHERE username NOT IN ('faiz','nick','aris')").run();
+// Admin can authenticate, but is intentionally excluded from cashier lists.
+db.prepare("UPDATE users SET active=CASE WHEN username IN ('admin','faiz','nick','aris') THEN 1 ELSE 0 END").run();
+const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
+if (!userCols.has('password_salt')) db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT');
+if (!userCols.has('password_hash')) db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
+DELETE FROM auth_sessions WHERE expires_at <= CAST(strftime('%s','now') AS INTEGER);
+`);
 
 // 2. Products Table
 const productSql = `CREATE TABLE products_new (
@@ -375,7 +389,7 @@ function makeInvoicePdf(sale, items) {
   rule(summaryX, totalTop - 5, pageWidth - margin, ink, 1.1);
   totalRow('TOTAL TAGIHAN', money(sale.total), totalTop, { bold: true, size: 12, color: totalColor });
   if (sale.payment_method === 'Tunai') {
-    totalRow('Uang diterima', money(sale.amount_paid || sale.total), totalTop + 23, { size: 8, color: muted });
+    totalRow('Uang diterima', money(sale.amount_paid ?? sale.total), totalTop + 23, { size: 8, color: muted });
     totalRow('Kembalian', money(sale.change_amount || 0), totalTop + 37, { size: 8, color: muted });
   }
   y = Math.max(summaryTop + 55, totalTop + (sale.payment_method === 'Tunai' ? 57 : 31));
@@ -461,6 +475,35 @@ const readBody = req => new Promise((resolve, reject) => {
 
 const validEAN = code => /^\d{13}$/.test(code) && [...code.slice(0, 12)].reduce((sum, n, i) => sum + Number(n) * (i % 2 ? 3 : 1), 0) % 10 === (10 - Number(code[12])) % 10;
 
+const SESSION_SECONDS = 12 * 60 * 60;
+const loginAttempts = new Map();
+const tokenHash = token => createHash('sha256').update(token).digest('hex');
+const passwordDigest = (password, salt) => scrypt(password, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+const cookieValue = (req, name) => {
+  const part = String(req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith(name + '='));
+  return part ? decodeURIComponent(part.slice(name.length + 1)) : '';
+};
+const requestOrigin = req => {
+  const proto = String(req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')).split(',')[0].trim();
+  return `${proto}://${req.headers.host}`;
+};
+const validRequestOrigin = req => {
+  const origin = req.headers.origin;
+  const expected = process.env.PUBLIC_BASE_URL ? new URL(process.env.PUBLIC_BASE_URL).origin : requestOrigin(req);
+  return typeof origin === 'string' && origin === expected;
+};
+const sessionCookie = (req, token, maxAge = SESSION_SECONDS) => {
+  const secure = (process.env.PUBLIC_BASE_URL || '').startsWith('https://') || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+  return `stockflow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+};
+const authenticatedUser = req => {
+  const token = cookieValue(req, 'stockflow_session');
+  if (!token || token.length < 40 || token.length > 100) return null;
+  return db.prepare(`SELECT u.id,u.username,u.name,u.role,s.token_hash FROM auth_sessions s JOIN users u ON u.id=s.user_id
+    WHERE s.token_hash=? AND s.expires_at>? AND u.active=1`).get(tokenHash(token), Math.floor(Date.now() / 1000)) || null;
+};
+const loginError = { error: 'Nama akun atau kata sandi salah.' };
+
 function generateEAN13() {
   const base = '200' + String(Math.floor(100_000_000 + Math.random() * 900_000_000));
   const sum = [...base].reduce((acc, d, i) => acc + Number(d) * (i % 2 ? 3 : 1), 0);
@@ -512,6 +555,35 @@ const VALID_PAYMENT_METHODS = [
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
+    if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+      if (!validRequestOrigin(req)) return send(res, 403, { error: 'Asal permintaan tidak valid.' });
+      const data = await readBody(req);
+      const username = String(data.username || '').trim().toLowerCase().slice(0, 80);
+      const password = String(data.password || '');
+      if (!username || !password || password.length > 256) return send(res, 401, loginError);
+      const now = Date.now();
+      for (const [key, value] of loginAttempts) if (value.resetAt <= now) loginAttempts.delete(key);
+      const ip = String(req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown').slice(0, 100);
+      const attemptKey = `${ip}:${username}`;
+      const attempt = loginAttempts.get(attemptKey) || { count: 0, resetAt: now + 15 * 60 * 1000 };
+      if (attempt.count >= 10) return send(res, 429, { error: 'Terlalu banyak percobaan. Coba lagi 15 menit kemudian.' });
+      attempt.count++;
+      loginAttempts.set(attemptKey, attempt);
+      const user = db.prepare('SELECT id,username,name,role,active,password_salt,password_hash FROM users WHERE username=?').get(username);
+      const salt = user?.password_salt || 'howell-stockflow-invalid-login-salt';
+      const actual = await passwordDigest(password, salt);
+      const expected = user?.password_hash ? Buffer.from(user.password_hash, 'hex') : Buffer.alloc(64);
+      const matched = expected.length === actual.length && timingSafeEqual(expected, actual);
+      if (!matched || !user || !user.active || !user.password_hash) return send(res, 401, loginError);
+      loginAttempts.delete(attemptKey);
+      const token = randomBytes(32).toString('base64url');
+      const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
+      db.prepare('INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(tokenHash(token), user.id, expiresAt);
+      db.prepare('DELETE FROM auth_sessions WHERE user_id=? AND token_hash NOT IN (SELECT token_hash FROM auth_sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 5)').run(user.id, user.id);
+      res.setHeader('Set-Cookie', sessionCookie(req, token));
+      return send(res, 200, { id: user.id, username: user.username, name: user.name, role: user.role, expires_at: expiresAt });
+    }
+
     const invoicePdfMatch = url.pathname.match(/^\/invoice\/([A-Za-z0-9_-]{32,64})\.pdf$/);
     if (req.method === 'GET' && invoicePdfMatch) {
       const sale = db.prepare('SELECT * FROM sales WHERE share_token=?').get(invoicePdfMatch[1]);
@@ -531,6 +603,38 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname.startsWith('/api/')) {
+      const authUser = authenticatedUser(req);
+      if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+        if (!authUser) return send(res, 401, { error: 'Sesi login sudah berakhir. Silakan masuk kembali.' });
+        if (!validRequestOrigin(req)) return send(res, 403, { error: 'Asal permintaan tidak valid.' });
+        db.prepare('DELETE FROM auth_sessions WHERE token_hash=?').run(authUser.token_hash);
+        res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
+        return send(res, 200, { ok: true });
+      }
+      if (!authUser) return send(res, 401, { error: 'Silakan masuk untuk melanjutkan.' });
+      req.authUser = authUser;
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !validRequestOrigin(req)) {
+        return send(res, 403, { error: 'Asal permintaan tidak valid.' });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+        return send(res, 200, { id: authUser.id, username: authUser.username, name: authUser.name, role: authUser.role });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/auth/change-password') {
+        const data = await readBody(req);
+        const current = String(data.current_password || ''), next = String(data.new_password || '');
+        const user = db.prepare('SELECT password_salt,password_hash FROM users WHERE id=? AND active=1').get(authUser.id);
+        const actual = await passwordDigest(current, user.password_salt || 'howell-stockflow-invalid-login-salt');
+        const expected = user.password_hash ? Buffer.from(user.password_hash, 'hex') : Buffer.alloc(64);
+        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return send(res, 401, { error: 'Kata sandi saat ini tidak cocok.' });
+        if (next.length < 12 || next.length > 256) return send(res, 400, { error: 'Kata sandi baru harus 12–256 karakter.' });
+        const salt = randomBytes(16).toString('hex');
+        const hash = (await passwordDigest(next, salt)).toString('hex');
+        db.prepare('UPDATE users SET password_salt=?,password_hash=? WHERE id=?').run(salt, hash, authUser.id);
+        db.prepare('DELETE FROM auth_sessions WHERE user_id=? AND token_hash<>?').run(authUser.id, authUser.token_hash);
+        return send(res, 200, { ok: true });
+      }
 
       // ==================== USERS / CASHIERS ====================
       if (req.method === 'GET' && url.pathname === '/api/users') {
@@ -549,7 +653,7 @@ const server = http.createServer(async (req, res) => {
       // ==================== SALES EXPORT ====================
       if (req.method === 'GET' && url.pathname === '/api/sales/export') {
         const from = url.searchParams.get('from') || '', to = url.searchParams.get('to') || '';
-        const cashierId = url.searchParams.get('cashier_id') || '';
+        const cashierId = req.authUser.role === 'kasir' ? String(req.authUser.id) : (url.searchParams.get('cashier_id') || '');
         const paymentMethod = url.searchParams.get('payment_method') || '';
         const paymentStatus = url.searchParams.get('payment_status') || '';
 
@@ -599,7 +703,7 @@ const server = http.createServer(async (req, res) => {
       // ==================== LIST SALES ====================
       if (req.method === 'GET' && url.pathname === '/api/sales') {
         const from = url.searchParams.get('from') || '', to = url.searchParams.get('to') || '';
-        const cashierId = url.searchParams.get('cashier_id') || '';
+        const cashierId = req.authUser.role === 'kasir' ? String(req.authUser.id) : (url.searchParams.get('cashier_id') || '');
         const paymentMethod = url.searchParams.get('payment_method') || '';
         const paymentStatus = url.searchParams.get('payment_status') || '';
         const transactionStatus = url.searchParams.get('transaction_status') || '';
@@ -632,8 +736,9 @@ const server = http.createServer(async (req, res) => {
       const shareLinkMatch = url.pathname.match(/^\/api\/sales\/(\d+)\/share-link$/);
       if (req.method === 'POST' && shareLinkMatch) {
         const id = Number(shareLinkMatch[1]);
-        const sale = db.prepare('SELECT id, invoice_no, share_token FROM sales WHERE id=?').get(id);
+        const sale = db.prepare('SELECT id, invoice_no, share_token, cashier_id FROM sales WHERE id=?').get(id);
         if (!sale) return send(res, 404, { error: 'Transaksi tidak ditemukan.' });
+        if (req.authUser.role === 'kasir' && sale.cashier_id !== req.authUser.id) return send(res, 404, { error: 'Transaksi tidak ditemukan.' });
         const token = sale.share_token || randomBytes(32).toString('base64url');
         if (!sale.share_token) db.prepare('UPDATE sales SET share_token=? WHERE id=?').run(token, id);
         const configuredOrigin = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -650,6 +755,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && saleMatch) {
         const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(saleMatch[1]));
         if (!sale) return send(res, 404, { error: 'Transaksi tidak ditemukan.' });
+        if (req.authUser.role === 'kasir' && sale.cashier_id !== req.authUser.id) return send(res, 404, { error: 'Transaksi tidak ditemukan.' });
         const items = db.prepare(`
           SELECT si.*, p.panjang, p.category
           FROM sale_items si
@@ -678,7 +784,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Cashier handling: verify ID and lookup name
-        const cashierId = Number(data.cashier_id || 0);
+        const cashierId = req.authUser.role === 'kasir' ? req.authUser.id : Number(data.cashier_id || 0);
         const userObj = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
         if (!userObj) return send(res, 400, { error: 'Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.' });
         const cashierName = userObj.name;
@@ -846,12 +952,13 @@ const server = http.createServer(async (req, res) => {
         const id = Number(confirmMatch[1]);
         const data = await readBody(req);
         const ref = String(data.payment_ref || '').trim();
-        const user = String(data.user_name || 'Admin Howell').trim();
+        const user = req.authUser.name;
 
         db.exec('BEGIN IMMEDIATE');
         try {
           const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
           if (!sale) throw new Error('Transaksi tidak ditemukan.');
+          if (req.authUser.role === 'kasir' && sale.cashier_id !== req.authUser.id) throw new Error('Transaksi tidak ditemukan.');
           if (sale.transaction_status === 'CANCELLED') throw new Error('Transaksi sudah dibatalkan; pembayaran tidak dapat dikonfirmasi.');
           if (sale.payment_status === 'LUNAS') throw new Error('Pembayaran transaksi ini sudah berstatus LUNAS.');
 
@@ -878,12 +985,13 @@ const server = http.createServer(async (req, res) => {
         const data = await readBody(req);
         const reason = String(data.reason || '').trim();
         if (!reason) return send(res, 400, { error: 'Alasan pembatalan transaksi wajib diisi.' });
-        const user = String(data.user_name || 'Admin Howell').trim();
+        const user = req.authUser.name;
 
         db.exec('BEGIN IMMEDIATE');
         try {
           const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
           if (!sale) throw new Error('Transaksi tidak ditemukan.');
+          if (req.authUser.role === 'kasir' && sale.cashier_id !== req.authUser.id) throw new Error('Transaksi tidak ditemukan.');
           if (sale.transaction_status === 'CANCELLED') throw new Error('Transaksi ini sudah dibatalkan sebelumnya.');
 
           // Restore inventory stock atomik
@@ -919,10 +1027,11 @@ const server = http.createServer(async (req, res) => {
       // ==================== CORRECT CASHIER (ADMIN) ====================
       const correctMatch = url.pathname.match(/^\/api\/sales\/(\d+)\/correct-cashier$/);
       if (req.method === 'POST' && correctMatch) {
+        if (req.authUser.role !== 'admin') return send(res, 403, { error: 'Koreksi kasir hanya dapat dilakukan administrator.' });
         const id = Number(correctMatch[1]);
         const data = await readBody(req);
         const newCashierId = Number(data.cashier_id);
-        const adminUser = String(data.user_name || 'Admin Howell').trim();
+        const adminUser = req.authUser.name;
         const reason = String(data.reason || '').trim();
         if (!reason) return send(res, 400, { error: 'Alasan koreksi data kasir wajib dicatat untuk audit log.' });
 
@@ -962,7 +1071,7 @@ const server = http.createServer(async (req, res) => {
         const dateParam = url.searchParams.get('date') || '';
         // If not provided, calculate today in WIB (UTC+7)
         const targetDate = dateParam || db.prepare("SELECT date('now', '+7 hours') d").get().d;
-        const cashierFilter = url.searchParams.get('cashier_id') || '';
+        const cashierFilter = req.authUser.role === 'kasir' ? String(req.authUser.id) : (url.searchParams.get('cashier_id') || '');
 
         // Summary of completed sales
         const salesStats = db.prepare(`
@@ -1056,7 +1165,7 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, { error: 'Tanggal operasional penutupan tidak valid.' });
         }
 
-        const cashierId = Number(d.cashier_id || 0);
+        const cashierId = req.authUser.role === 'kasir' ? req.authUser.id : Number(d.cashier_id || 0);
         const cashier = db.prepare("SELECT name FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
         if (!cashier) return send(res, 400, { error: 'Pilih kasir bertugas: Faiz, Nick, atau Aris.' });
         const cashierName = cashier.name;
@@ -1069,7 +1178,7 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, { error: 'Nominal penutupan harus berupa Rupiah bulat nol atau lebih.' });
         }
         const notes = String(d.notes || '').trim();
-        const reconciledBy = String(d.reconciled_by || cashierName).trim();
+        const reconciledBy = req.authUser.name;
 
         db.exec('BEGIN IMMEDIATE');
         try {
@@ -1153,13 +1262,17 @@ const server = http.createServer(async (req, res) => {
 
       // ==================== LIST CLOSINGS ====================
       if (req.method === 'GET' && url.pathname === '/api/reconciliation/closings') {
-        const rows = db.prepare(`SELECT * FROM cashier_closings ORDER BY closing_date DESC, id DESC LIMIT 100`).all();
+        const rows = req.authUser.role === 'kasir'
+          ? db.prepare(`SELECT * FROM cashier_closings WHERE cashier_id=? ORDER BY closing_date DESC, id DESC LIMIT 100`).all(req.authUser.id)
+          : db.prepare(`SELECT * FROM cashier_closings ORDER BY closing_date DESC, id DESC LIMIT 100`).all();
         return send(res, 200, rows);
       }
 
       // ==================== RECONCILIATION EXPORT ====================
       if (req.method === 'GET' && url.pathname === '/api/reconciliation/export') {
-        const rows = db.prepare(`SELECT * FROM cashier_closings ORDER BY closing_date DESC, id DESC`).all();
+        const rows = req.authUser.role === 'kasir'
+          ? db.prepare(`SELECT * FROM cashier_closings WHERE cashier_id=? ORDER BY closing_date DESC, id DESC`).all(req.authUser.id)
+          : db.prepare(`SELECT * FROM cashier_closings ORDER BY closing_date DESC, id DESC`).all();
         const csv = toCsv(rows, [
           { title: 'Tanggal', val: r => r.closing_date },
           { title: 'Nama Kasir', val: r => r.cashier_name },
@@ -1262,7 +1375,7 @@ const server = http.createServer(async (req, res) => {
           db.prepare(`UPDATE products SET name=?,category=?,unit=?,barcode=?,panjang=?,reference_price=?,sale_price=?,min_stock=?,location=?,stock_location=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
             .run(name, category, unit, barcode, panjang, refPrice, salePrice, minStock, location, stockLocation, id);
           db.prepare("INSERT INTO audit_logs(action,entity,entity_id,user_name,details) VALUES('UPDATE_PRODUCT','product',?,?,?)")
-            .run(id, String(p.user_name || 'Admin Howell'), JSON.stringify({ name, barcode, panjang, salePrice, refPrice }));
+            .run(id, req.authUser.name, JSON.stringify({ name, barcode, panjang, salePrice, refPrice }));
           db.exec('COMMIT');
           return send(res, 200, { ok: true, id });
         } catch (e) {
@@ -1290,8 +1403,8 @@ const server = http.createServer(async (req, res) => {
           const result = db.prepare(`INSERT INTO products(sku,barcode,name,category,unit,panjang,reference_price,sale_price,stock,min_stock,location,stock_location) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
             .run(p.sku.trim(), barcode, p.name.trim(), p.category || '', p.unit || 'pcs', p.panjang || '', rp, sp, qty, Number(p.min_stock || 0), p.location || '', p.stock_location || 'Gudang utama');
           if (qty) {
-            db.prepare("INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location) VALUES(?,'opening',?,?,'SALDO-AWAL','Saldo awal dari pembuatan produk',?)")
-              .run(result.lastInsertRowid, qty, qty, p.stock_location || 'Gudang utama');
+            db.prepare("INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,'opening',?,?,'SALDO-AWAL','Saldo awal dari pembuatan produk',?,?)")
+              .run(result.lastInsertRowid, qty, qty, p.stock_location || 'Gudang utama', req.authUser.name);
           }
           db.exec('COMMIT');
           return send(res, 201, { id: Number(result.lastInsertRowid) });
@@ -1355,7 +1468,7 @@ const server = http.createServer(async (req, res) => {
           const balance = kind === 'in' ? p.stock + qty : p.stock - qty;
           if (balance < 0) { db.exec('ROLLBACK'); return send(res, 409, { error: `Stok tidak mencukupi. Stok saat ini ${p.stock} ${p.unit}.` }); }
           db.prepare('UPDATE products SET stock=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(balance, p.id);
-          db.prepare('INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,?,?,?,?,?,?,?)').run(p.id, kind, qty, balance, (m.reference || '').trim() || 'STK-' + Date.now(), m.note || '', p.stock_location, String(m.user_name || 'Admin Howell'));
+          db.prepare('INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,?,?,?,?,?,?,?)').run(p.id, kind, qty, balance, (m.reference || '').trim() || 'STK-' + Date.now(), m.note || '', p.stock_location, req.authUser.name);
           db.exec('COMMIT');
           return send(res, 201, { balance });
         } catch (e) {
@@ -1401,14 +1514,14 @@ const server = http.createServer(async (req, res) => {
             if (quantity > 0) {
               const kind = data.mode === 'opening' ? 'opening' : 'in';
               db.prepare('INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,?,?,?,?,?,?,?)')
-                .run(productId, kind, quantity, quantity, `IMP-${b.id}-${item.source_row}`, data.mode === 'opening' ? 'Saldo awal dari file pameran' : 'Alokasi stok ke lokasi pameran', destination, String(data.user_name || 'Admin Howell'));
+                .run(productId, kind, quantity, quantity, `IMP-${b.id}-${item.source_row}`, data.mode === 'opening' ? 'Saldo awal dari file pameran' : 'Alokasi stok ke lokasi pameran', destination, req.authUser.name);
               qtyApplied += quantity;
             }
             db.prepare("UPDATE import_items SET import_result='IMPORTED' WHERE id=?").run(item.id);
             imported++;
           }
           db.prepare("UPDATE import_batches SET status='COMMITTED',import_mode=?,destination=?,committed_at=CURRENT_TIMESTAMP WHERE id=?").run(data.mode, destination, b.id);
-          db.prepare("INSERT INTO audit_logs(action,entity,entity_id,user_name,details) VALUES('IMPORT_PRODUCTS','import_batch',?,?,?)").run(b.id, String(data.user_name || 'Admin Howell'), JSON.stringify({ mode: data.mode, destination, imported, skipped, qtyApplied }));
+          db.prepare("INSERT INTO audit_logs(action,entity,entity_id,user_name,details) VALUES('IMPORT_PRODUCTS','import_batch',?,?,?)").run(b.id, req.authUser.name, JSON.stringify({ mode: data.mode, destination, imported, skipped, qtyApplied }));
           db.exec('COMMIT');
           return send(res, 200, { imported, skipped, qtyApplied, mode: data.mode, destination });
         } catch (e) {
@@ -1424,7 +1537,7 @@ const server = http.createServer(async (req, res) => {
 
       const verifyMatch = url.pathname.match(/^\/api\/products\/(\d+)\/verify$/);
       if (req.method === 'POST' && verifyMatch) {
-        const data = await readBody(req), id = Number(verifyMatch[1]), actual = Number(data.actual_stock), user = String(data.user_name || 'Admin Howell').trim(), reason = String(data.reason || '').trim();
+        const data = await readBody(req), id = Number(verifyMatch[1]), actual = Number(data.actual_stock), user = req.authUser.name, reason = String(data.reason || '').trim();
         if (!Number.isInteger(actual) || actual < 0 || !reason) return send(res, 400, { error: 'Jumlah hasil pemeriksaan harus bilangan bulat ≥ 0 dan alasan wajib diisi.' });
         db.exec('BEGIN IMMEDIATE');
         try {
@@ -1447,6 +1560,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Static Files Handler
+    if (url.pathname.startsWith('/data/')) {
+      if (!authenticatedUser(req)) return send(res, 401, { error: 'Silakan masuk untuk melanjutkan.' });
+      if (url.pathname !== '/data/current-exhibition-source.json') return send(res, 404, 'Not found', 'text/plain');
+      const sourcePath = path.join(dataDir, 'current-exhibition-source.json');
+      if (!fs.existsSync(sourcePath)) return send(res, 404, 'Data sumber tidak tersedia.', 'text/plain; charset=utf-8');
+      return send(res, 200, fs.readFileSync(sourcePath), 'application/json; charset=utf-8');
+    }
+    if (/\.(?:db|db-wal|db-shm|pem|key|env)$/i.test(url.pathname) || /^\/(?:work|scripts|\.git)(?:\/|$)/i.test(url.pathname)) {
+      return send(res, 404, 'Not found', 'text/plain');
+    }
     const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     const full = path.resolve(root, file);
     if (!full.startsWith(root + path.sep)) return send(res, 403, 'Forbidden', 'text/plain');
