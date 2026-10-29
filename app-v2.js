@@ -17,13 +17,17 @@ function applyRoleRestrictions() {
 
 function showLoginGate(message = '') {
   const gate = $('#authGate');
+  const wasHidden = gate?.hidden;
   if (gate) gate.hidden = false;
   const error = $('#authError');
   if (error) { error.textContent = message; error.hidden = !message; }
   $('#authLogoutButton')?.setAttribute('hidden', '');
   $('#authChangePasswordButton')?.setAttribute('hidden', '');
   if ($('#authAccountName')) $('#authAccountName').hidden = true;
-  setTimeout(() => $('#authUsername')?.focus(), 0);
+  // Background API refreshes can also receive 401 while the login form is open.
+  // Only focus the username when the gate first appears; repeated 401s must not
+  // steal focus from the password field while the user is typing.
+  if (wasHidden) setTimeout(() => $('#authUsername')?.focus(), 0);
 }
 function hideLoginGate(user) {
   authenticatedUser = user;
@@ -1956,7 +1960,7 @@ $('#movementSearch')?.addEventListener('input', e => {
 let liveRefreshRunning = false;
 
 async function refreshVisiblePage() {
-  if (document.hidden || liveRefreshRunning || $('#modalHost')?.querySelector('.modal')) return;
+  if (!authenticatedUser || !$('#authGate')?.hidden || document.hidden || liveRefreshRunning || $('#modalHost')?.querySelector('.modal')) return;
   const page = document.querySelector('.page:not(.hidden)')?.id?.replace(/Page$/, '');
   const refreshers = {
     dashboard: loadDashboard,
