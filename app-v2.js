@@ -159,13 +159,11 @@ function updateUserDisplay() {
   if ($('#topCashierName')) $('#topCashierName').textContent = authenticatedUser?.role === 'admin' ? 'Admin' : identity.name;
   if ($('#topAvatar')) $('#topAvatar').textContent = initials;
   if ($('#userSwitcher')) {
-    $('#userSwitcher').title = authenticatedUser?.role === 'admin' ? 'Admin · pilih kasir yang bertugas' : 'Kasir sesuai akun yang masuk';
+    $('#userSwitcher').title = authenticatedUser?.role === 'admin' ? 'Akun Admin · pilih petugas transaksi' : 'Kasir sesuai akun yang masuk';
     $('#userSwitcher').classList.toggle('user-admin', authenticatedUser?.role === 'admin');
-    const caret = $('#userSwitcher').querySelector(':scope > span:last-child');
-    if (caret) caret.hidden = authenticatedUser?.role === 'admin';
   }
   if ($('#topCashierChip')) {
-    $('#topCashierChip').title = authenticatedUser?.role === 'admin' ? 'Admin · kasir yang bertugas' : 'Kasir yang sedang bertugas';
+    $('#topCashierChip').title = authenticatedUser?.role === 'admin' ? 'Akun Admin · klik untuk memilih petugas transaksi' : 'Kasir yang sedang bertugas';
     $('#topCashierChip').classList.toggle('cashier-chip-admin', authenticatedUser?.role === 'admin');
   }
   if ($('#closeReconciledBy') && !$('#closeReconciledBy').value) {
@@ -202,10 +200,9 @@ function populateCashierSelects() {
 
 function showUserSwitcherModal() {
   if (authenticatedUser?.role === 'kasir') return notify('Kasir aktif mengikuti akun login. Untuk berpindah kasir, keluar lalu masuk dengan akun kasir yang sesuai.');
-  if (authenticatedUser?.role === 'admin') return notify('Akun Admin sedang masuk. Pilih kasir bertugas pada form transaksi atau penutupan kasir.');
   modal('Ganti Kasir Bertugas', `
     <div style="font-size:12px;color:#556575;margin-bottom:12px">
-      Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.
+      Pilih petugas transaksi: Admin, Faiz, Nick, atau Aris. Akun yang masuk tetap: ${esc(authenticatedUser?.name || 'Admin')}.
     </div>
       <div style="display:flex;flex-direction:column;gap:8px" id="userRadioList">
       ${allUsers.map(u => `
@@ -213,7 +210,7 @@ function showUserSwitcherModal() {
           <input type="radio" name="selected_user" value="${u.id}" ${u.id === activeCashier.id ? 'checked' : ''}>
           <div style="flex:1">
             <b>${esc(u.name)}</b>
-            <div style="font-size:10px;color:#718096">Staf Kasir Pameran · ID: ${u.id}</div>
+            <div style="font-size:10px;color:#718096">${u.role === 'admin' ? 'Administrator · ID' : 'Staf Kasir Pameran · ID'}: ${u.id}</div>
           </div>
           ${u.id === activeCashier.id ? '<span style="font-size:10px;font-weight:700;color:var(--navy);background:#e2ebf5;padding:2px 8px;border-radius:10px">Aktif</span>' : ''}
         </label>
@@ -227,7 +224,7 @@ function showUserSwitcherModal() {
     localStorage.setItem('howell_active_cashier_id', String(chosen.id));
     updateUserDisplay();
     populateCashierSelects();
-    notify(`Beralih ke kasir: ${chosen.name}`);
+    notify(`Petugas transaksi dipilih: ${chosen.name}`);
   });
 }
 

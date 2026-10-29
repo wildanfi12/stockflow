@@ -644,9 +644,9 @@ const server = http.createServer(async (req, res) => {
 
       // ==================== USERS / CASHIERS ====================
       if (req.method === 'GET' && url.pathname === '/api/users') {
-        // This endpoint populates cashier controls; the administrator account
-        // remains available for system administration but is not a cashier.
-        const users = db.prepare("SELECT id, username, name, role, active FROM users WHERE active=1 AND role='kasir' ORDER BY id").all();
+        // Admin may be assigned as the transaction attendant while retaining
+        // administrator authorization for protected operations.
+        const users = db.prepare("SELECT id, name, role, active FROM users WHERE active=1 AND (role='kasir' OR (role='admin' AND ?='admin')) ORDER BY id").all(req.authUser.role);
         return send(res, 200, users);
       }
 
@@ -791,8 +791,8 @@ const server = http.createServer(async (req, res) => {
 
         // Cashier handling: verify ID and lookup name
         const cashierId = req.authUser.role === 'kasir' ? req.authUser.id : Number(data.cashier_id || 0);
-        const userObj = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
-        if (!userObj) return send(res, 400, { error: 'Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.' });
+        const userObj = db.prepare("SELECT * FROM users WHERE id=? AND active=1 AND role IN ('admin','kasir')").get(cashierId);
+        if (!userObj) return send(res, 400, { error: 'Pilih Admin atau salah satu kasir yang aktif.' });
         const cashierName = userObj.name;
 
         // Payment status & verification
@@ -1179,8 +1179,8 @@ const server = http.createServer(async (req, res) => {
         }
 
         const cashierId = req.authUser.role === 'kasir' ? req.authUser.id : Number(d.cashier_id || 0);
-        const cashier = db.prepare("SELECT name FROM users WHERE id=? AND active=1 AND role='kasir'").get(cashierId);
-        if (!cashier) return send(res, 400, { error: 'Pilih kasir bertugas: Faiz, Nick, atau Aris.' });
+        const cashier = db.prepare("SELECT name FROM users WHERE id=? AND active=1 AND role IN ('admin','kasir')").get(cashierId);
+        if (!cashier) return send(res, 400, { error: 'Pilih Admin atau salah satu kasir yang aktif.' });
         const cashierName = cashier.name;
         const openingCash = Number(d.opening_cash ?? 0);
         const actualCash = Number(d.actual_cash ?? 0);
