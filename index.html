@@ -44,11 +44,11 @@
       <div><b>Gudang Pameran</b><small>Howell Official Store</small></div>
       <span class="online"></span>
     </div>
-    <div class="user" id="userSwitcher" title="Klik untuk ganti kasir">
+    <div class="user" id="userSwitcher" title="Admin · pilih kasir yang bertugas">
       <div class="avatar" id="currentAvatar">HW</div>
       <div>
-        <b id="currentCashierName">Faiz</b>
-        <small id="currentCashierRole">Kasir Aktif (ID: 2)</small>
+        <b id="currentCashierName">Admin</b>
+        <small id="currentCashierRole">Administrator</small>
       </div>
       <span>⌄</span>
     </div>
@@ -60,8 +60,8 @@
   <header class="topbar">
     <div class="crumb">Howell StockFlow <span>/</span> <b id="crumb">Dashboard</b></div>
     <div class="top-actions">
-      <div class="cashier-chip" id="topCashierChip" title="Kasir yang sedang bertugas">
-        <span>👤</span><b id="topCashierName">Faiz</b>
+      <div class="cashier-chip" id="topCashierChip" title="Akun yang sedang masuk">
+        <span aria-hidden="true">👤</span><b id="topCashierName">Admin</b>
       </div>
       <span class="auth-account" id="authAccountName" hidden></span>
       <div class="date-chip"><span>◷</span><span id="today"></span></div>
@@ -198,7 +198,7 @@
 
         <div class="cashier-fields">
           <label class="field">
-            <span>Kasir yang bertugas *</span>
+            <span id="saleCashierLabel">Kasir yang bertugas *</span>
             <select id="saleCashierSelect"></select>
           </label>
           <label class="field">
@@ -503,7 +503,7 @@
               <input type="date" id="closeDate">
             </div>
             <div class="field">
-              <label>Kasir yang Bertugas *</label>
+              <label id="closeCashierLabel">Kasir yang Ditutup *</label>
               <select id="closeCashierSelect"></select>
             </div>
             <div class="field full">

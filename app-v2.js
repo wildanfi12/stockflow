@@ -32,10 +32,7 @@ function hideLoginGate(user) {
   if ($('#authGate')) $('#authGate').hidden = true;
   if ($('#authLogoutButton')) $('#authLogoutButton').hidden = false;
   if ($('#authChangePasswordButton')) $('#authChangePasswordButton').hidden = false;
-  if ($('#authAccountName')) {
-    $('#authAccountName').textContent = `${user.name} · ${user.role === 'admin' ? 'Admin' : 'Kasir'}`;
-    $('#authAccountName').hidden = false;
-  }
+  if ($('#authAccountName')) $('#authAccountName').hidden = true;
 }
 
 function timeFmt(s) {
@@ -133,13 +130,19 @@ let allUsers = [];
 let activeUser = { id: 1, name: 'Admin', role: 'admin' };
 let activeCashier = { id: 2, name: 'Faiz', role: 'kasir' };
 
+function selectedCashier() {
+  return authenticatedUser?.role === 'admin' ? authenticatedUser : activeCashier;
+}
+
 async function initUsers() {
   try {
     allUsers = await api('/api/users');
     const savedId = Number(localStorage.getItem('howell_active_cashier_id'));
-    activeCashier = authenticatedUser?.role === 'kasir'
-      ? (allUsers.find(u => u.id === authenticatedUser.id) || allUsers[0] || activeCashier)
-      : (allUsers.find(u => u.id === savedId && u.active) || allUsers[0] || activeCashier);
+    if (authenticatedUser?.role === 'kasir') {
+      activeCashier = allUsers.find(u => u.id === authenticatedUser.id) || activeCashier;
+    } else {
+      activeCashier = allUsers.find(u => u.id === savedId && u.active) || allUsers[0] || activeCashier;
+    }
     updateUserDisplay();
     populateCashierSelects();
   } catch (e) {
@@ -148,14 +151,25 @@ async function initUsers() {
 }
 
 function updateUserDisplay() {
-  const initials = activeCashier.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HW';
-  if ($('#currentCashierName')) $('#currentCashierName').textContent = activeCashier.name;
-  if ($('#currentCashierRole')) $('#currentCashierRole').textContent = `Kasir Aktif (ID: ${activeCashier.id})`;
+  const identity = selectedCashier();
+  const initials = identity.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HW';
+  if ($('#currentCashierName')) $('#currentCashierName').textContent = identity.name;
+  if ($('#currentCashierRole')) $('#currentCashierRole').textContent = identity.role === 'admin' ? 'Administrator' : `Kasir Aktif (ID: ${identity.id})`;
   if ($('#currentAvatar')) $('#currentAvatar').textContent = initials;
-  if ($('#topCashierName')) $('#topCashierName').textContent = activeCashier.name;
+  if ($('#topCashierName')) $('#topCashierName').textContent = authenticatedUser?.role === 'admin' ? 'Admin' : identity.name;
   if ($('#topAvatar')) $('#topAvatar').textContent = initials;
+  if ($('#userSwitcher')) {
+    $('#userSwitcher').title = authenticatedUser?.role === 'admin' ? 'Admin · pilih kasir yang bertugas' : 'Kasir sesuai akun yang masuk';
+    $('#userSwitcher').classList.toggle('user-admin', authenticatedUser?.role === 'admin');
+    const caret = $('#userSwitcher').querySelector(':scope > span:last-child');
+    if (caret) caret.hidden = authenticatedUser?.role === 'admin';
+  }
+  if ($('#topCashierChip')) {
+    $('#topCashierChip').title = authenticatedUser?.role === 'admin' ? 'Admin · kasir yang bertugas' : 'Kasir yang sedang bertugas';
+    $('#topCashierChip').classList.toggle('cashier-chip-admin', authenticatedUser?.role === 'admin');
+  }
   if ($('#closeReconciledBy') && !$('#closeReconciledBy').value) {
-    $('#closeReconciledBy').value = activeCashier.name;
+    $('#closeReconciledBy').value = authenticatedUser?.role === 'admin' ? authenticatedUser.name : activeCashier.name;
   }
 }
 
@@ -168,20 +182,27 @@ function populateCashierSelects() {
   const defaultCashierId = defaultCashier ? String(defaultCashier.id) : '';
 
   if ($('#saleCashierSelect')) {
-    $('#saleCashierSelect').innerHTML = options;
-    $('#saleCashierSelect').value = defaultCashierId;
+    const select = $('#saleCashierSelect');
+    select.innerHTML = options;
+    select.disabled = authenticatedUser?.role === 'kasir';
+    select.value = authenticatedUser?.role === 'kasir' ? String(authenticatedUser.id) : defaultCashierId;
   }
   if ($('#salesCashierFilter')) {
     $('#salesCashierFilter').innerHTML = '<option value="">Semua Kasir</option>' + options;
   }
   if ($('#closeCashierSelect')) {
-    $('#closeCashierSelect').innerHTML = options;
-    $('#closeCashierSelect').value = defaultCashierId;
+    const select = $('#closeCashierSelect');
+    select.innerHTML = options;
+    select.disabled = authenticatedUser?.role === 'kasir';
+    select.value = authenticatedUser?.role === 'kasir' ? String(authenticatedUser.id) : defaultCashierId;
   }
+  if ($('#saleCashierLabel')) $('#saleCashierLabel').textContent = authenticatedUser?.role === 'admin' ? 'Kasir yang bertugas *' : 'Kasir bertugas *';
+  if ($('#closeCashierLabel')) $('#closeCashierLabel').textContent = authenticatedUser?.role === 'admin' ? 'Kasir yang Ditutup *' : 'Kasir yang Bertugas *';
 }
 
 function showUserSwitcherModal() {
   if (authenticatedUser?.role === 'kasir') return notify('Kasir aktif mengikuti akun login. Untuk berpindah kasir, keluar lalu masuk dengan akun kasir yang sesuai.');
+  if (authenticatedUser?.role === 'admin') return notify('Akun Admin sedang masuk. Pilih kasir bertugas pada form transaksi atau penutupan kasir.');
   modal('Ganti Kasir Bertugas', `
     <div style="font-size:12px;color:#556575;margin-bottom:12px">
       Pilih salah satu dari tiga kasir bertugas: Faiz, Nick, atau Aris.
@@ -517,9 +538,9 @@ $('#completeSale')?.addEventListener('click', async () => {
     return notify(`Nominal tunai diterima (${rupiah(cash)}) kurang dari total tagihan (${rupiah(total)}).`);
   }
 
-  const cashierId = Number($('#saleCashierSelect')?.value || activeCashier.id);
-  const selectedCashier = allUsers.find(u => u.id === cashierId) || allUsers[0];
-  if (!selectedCashier) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
+  const cashierId = authenticatedUser?.role === 'kasir' ? authenticatedUser.id : Number($('#saleCashierSelect')?.value || activeCashier.id);
+  const cashierForSale = allUsers.find(u => u.id === cashierId) || allUsers[0];
+  if (!cashierForSale) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
   const isConfirmed = $('#paymentConfirmed')?.checked ?? true;
   const paymentStatus = (paymentMethod !== 'Tunai' && !isConfirmed) ? 'MENUNGGU_PEMBAYARAN' : 'LUNAS';
 
@@ -545,8 +566,8 @@ $('#completeSale')?.addEventListener('click', async () => {
     amount_paid: paymentMethod === 'Tunai' ? cash : (paymentStatus === 'LUNAS' ? total : 0),
     change_amount: paymentMethod === 'Tunai' ? Math.max(0, cash - total) : 0,
     notes,
-    cashier_id: selectedCashier.id,
-    user_name: selectedCashier.name
+    cashier_id: cashierForSale.id,
+    user_name: authenticatedUser?.name || cashierForSale.name
   };
   const payloadSignature = JSON.stringify(salePayload);
   if (!pendingSaleRequest || pendingSaleRequest.signature !== payloadSignature) {
@@ -1319,7 +1340,7 @@ async function loadClosing({ preserveInputs = false } = {}) {
     const todayStr = dateWib();
     if ($('#closeDate') && !$('#closeDate').value) $('#closeDate').value = todayStr;
     const date = $('#closeDate')?.value || todayStr;
-    const cashierId = $('#closeCashierSelect')?.value || allUsers[0]?.id || activeCashier.id;
+    const cashierId = authenticatedUser?.role === 'kasir' ? authenticatedUser.id : ($('#closeCashierSelect')?.value || allUsers[0]?.id || activeCashier.id);
 
     const data = await api(`/api/reconciliation?date=${encodeURIComponent(date)}&cashier_id=${encodeURIComponent(cashierId)}`);
     const methods = data.methods || [];
@@ -1420,7 +1441,7 @@ $('#btnSaveClosing')?.addEventListener('click', async () => {
   const date = $('#closeDate')?.value;
   if (!date) return notify('Pilih tanggal operasional.');
 
-  const cashierId = Number($('#closeCashierSelect')?.value || activeCashier.id);
+  const cashierId = authenticatedUser?.role === 'kasir' ? authenticatedUser.id : Number($('#closeCashierSelect')?.value || activeCashier.id);
   const selectedCashier = allUsers.find(u => u.id === cashierId) || allUsers[0];
   if (!selectedCashier) return notify('Daftar kasir belum tersedia. Muat ulang aplikasi lalu coba lagi.');
   const openingCash = Number($('#closeOpeningCash')?.value || 0);

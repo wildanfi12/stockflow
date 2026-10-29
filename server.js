@@ -900,7 +900,7 @@ const server = http.createServer(async (req, res) => {
           const saleRes = saleInsert.run(
             invoice, customerName, customerPhone, paymentMethod, paymentStatus,
             paymentRef, subtotal, discount, discountRate, total, amountPaid,
-            changeAmount, cashierId, cashierName, notes, cashierName, shareToken
+            changeAmount, cashierId, cashierName, notes, req.authUser.name, shareToken
           );
           const saleId = Number(saleRes.lastInsertRowid);
 
@@ -919,7 +919,7 @@ const server = http.createServer(async (req, res) => {
             const balance = x.p.stock - x.qty;
             updateStock.run(balance, x.p.id);
             itemInsert.run(saleId, x.p.id, x.p.sku, x.p.name, x.qty, x.price, x.sellingPrice, x.netLine, balance);
-            moveInsert.run(x.p.id, x.qty, balance, invoice, `Penjualan kasir ${invoice} (${cashierName})`, x.p.stock_location || 'Pameran', cashierName);
+            moveInsert.run(x.p.id, x.qty, balance, invoice, `Penjualan kasir ${invoice} (${cashierName})`, x.p.stock_location || 'Pameran', req.authUser.name);
           }
 
           // Insert payment record
@@ -934,7 +934,7 @@ const server = http.createServer(async (req, res) => {
           db.prepare(`
             INSERT INTO audit_logs (action, entity, entity_id, user_name, details)
             VALUES ('CREATE_SALE', 'sale', ?, ?, ?)
-          `).run(saleId, cashierName, JSON.stringify({
+          `).run(saleId, req.authUser.name, JSON.stringify({
             invoice_no: invoice,
             cashier_id: cashierId,
             cashier_name: cashierName,
