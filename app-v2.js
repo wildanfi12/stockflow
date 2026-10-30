@@ -776,8 +776,20 @@ async function shareInvoiceWhatsApp(s) {
 
 /* ==================== RIWAYAT PENJUALAN ==================== */
 let currentSalesList = [];
+let salesLoadSequence = 0;
+
+function getPaymentStatusBadge(status) {
+  const labels = {
+    LUNAS: ['LUNAS', 'done'],
+    MENUNGGU_PEMBAYARAN: ['MENUNGGU PEMBAYARAN', 'pending'],
+    DIBATALKAN: ['DIBATALKAN', 'cancelled']
+  };
+  const [label, className] = labels[String(status || '').toUpperCase()] || ['STATUS TIDAK DIKENAL', 'pending'];
+  return `<span class="status-badge ${className}">${esc(label)}</span>`;
+}
 
 async function loadSales() {
+  const requestId = ++salesLoadSequence;
   try {
     const params = new URLSearchParams();
     const fromVal = $('#salesFrom')?.value || '';
@@ -794,7 +806,10 @@ async function loadSales() {
     if (statusVal) params.set('payment_status', statusVal);
     if (searchVal) params.set('q', searchVal);
 
-    currentSalesList = await api('/api/sales?' + params.toString());
+    const sales = await api('/api/sales?' + params.toString());
+    if (requestId !== salesLoadSequence) return;
+    if (!Array.isArray(sales)) throw new Error('Respons riwayat transaksi tidak valid.');
+    currentSalesList = sales;
 
     if ($('#salesCount')) {
       $('#salesCount').textContent = `${currentSalesList.length} transaksi`;
@@ -932,7 +947,10 @@ async function loadSales() {
     });
 
   } catch (e) {
-    notify(e.message);
+    if (requestId !== salesLoadSequence) return;
+    if ($('#salesRows')) {
+      $('#salesRows').innerHTML = `<tr><td colspan="9" class="empty-row">Riwayat transaksi gagal dimuat: ${esc(e.message)}. Silakan tekan Terapkan atau muat ulang halaman.</td></tr>`;
+    }
   }
 }
 
