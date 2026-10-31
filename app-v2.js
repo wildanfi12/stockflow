@@ -1668,7 +1668,17 @@ async function loadProducts(q = '') {
     }
     if ($('#productRows')) {
       $('#productRows').innerHTML = rows.length ? rows.map(p => {
-        const priceData = p.in_latest_exhibition ? p.latest_exhibition_source : p;
+        const sourcePrice = p.latest_exhibition_source;
+        const priceData = Number(p.sale_price) > 0
+          ? {
+            ...p,
+            dealer_price: p.dealer_price ?? sourcePrice?.dealer_price ?? null,
+            source_qty: p.source_qty ?? sourcePrice?.source_qty ?? null,
+            source_unit_price: Number(p.sale_price),
+            source_total: Number(p.sale_price) * Number(p.source_qty ?? sourcePrice?.source_qty ?? 0),
+            source_discount_value: roundedDiscountUnitPrice(Number(p.sale_price), 25)
+          }
+          : (p.in_latest_exhibition ? sourcePrice : p);
         return `
         <tr>
           <td><div class="product-cell">${productCard(p)}</div></td>
