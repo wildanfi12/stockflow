@@ -1949,6 +1949,7 @@ async function verifyProduct(p) {
 
 /* ==================== PERGERAKAN STOK ==================== */
 let cachedMovements = [];
+let cachedMovementSales = [];
 function renderMovementRows(rows) {
   if (!$('#movementRows')) return;
   $('#movementRows').innerHTML = rows.length ? rows.map(m => `
@@ -1963,12 +1964,38 @@ function renderMovementRows(rows) {
     </tr>`).join('') : '<tr><td colspan="7" class="empty-row">Belum ada pergerakan stok sesuai pencarian.</td></tr>';
 }
 
+function renderMovementSalesSummary(rows) {
+  const body = $('#movementSalesSummaryRows');
+  if (!body) return;
+  const period = $('#movementSalesPeriod')?.value || 'today';
+  const q = $('#movementSearch')?.value.toLowerCase().trim() || '';
+  const filtered = rows.filter(item => !q || `${item.sku} ${item.name}`.toLowerCase().includes(q));
+  const totalQuantity = filtered.reduce((total, item) => total + Number(item.sold_quantity || 0), 0);
+  const periodLabel = period === 'all' ? 'semua waktu' : period === 'last3' ? '3 hari terakhir' : 'hari ini';
+  const meta = $('#movementSalesSummaryMeta');
+  if (meta) meta.textContent = `${totalQuantity.toLocaleString('id-ID')} unit terjual · ${filtered.length.toLocaleString('id-ID')} SKU · ${periodLabel}. Transaksi dibatalkan tidak dihitung.`;
+  body.innerHTML = filtered.length ? filtered.map(item => `
+    <tr>
+      <td><b>${esc(item.name)}</b><br>${esc(item.sku)}</td>
+      <td><b>${Number(item.sold_quantity).toLocaleString('id-ID')} ${esc(item.unit)}</b></td>
+      <td>${Number(item.stock).toLocaleString('id-ID')} ${esc(item.unit)}</td>
+      <td>${timeFmt(item.latest_sold_at)} WIB</td>
+    </tr>`).join('') : `<tr><td colspan="4" class="empty-row">Belum ada barang terjual ${periodLabel}${q ? ' untuk pencarian ini' : ''}.</td></tr>`;
+}
+
 async function loadMovements() {
   try {
-    cachedMovements = await api('/api/movements');
+    const period = $('#movementSalesPeriod')?.value || 'today';
+    const [movements, summary] = await Promise.all([
+      api('/api/movements'),
+      api(`/api/movements/sales-summary?period=${encodeURIComponent(period)}`)
+    ]);
+    cachedMovements = movements;
+    cachedMovementSales = summary.items;
     const q = $('#movementSearch')?.value.toLowerCase().trim() || '';
     const filtered = q ? cachedMovements.filter(m => `${m.sku} ${m.name} ${m.reference} ${m.note} ${m.location}`.toLowerCase().includes(q)) : cachedMovements;
     renderMovementRows(filtered);
+    renderMovementSalesSummary(cachedMovementSales);
   } catch (e) { notify(e.message); }
 }
 
@@ -1976,7 +2003,9 @@ $('#movementSearch')?.addEventListener('input', e => {
   const q = e.target.value.toLowerCase().trim();
   const filtered = q ? cachedMovements.filter(m => `${m.sku} ${m.name} ${m.reference} ${m.note} ${m.location}`.toLowerCase().includes(q)) : cachedMovements;
   renderMovementRows(filtered);
+  renderMovementSalesSummary(cachedMovementSales);
 });
+$('#movementSalesPeriod')?.addEventListener('change', loadMovements);
 
 /* ==================== LIVE DATA REFRESH ==================== */
 let liveRefreshRunning = false;

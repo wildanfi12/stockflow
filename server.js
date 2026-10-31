@@ -1474,6 +1474,31 @@ const server = http.createServer(async (req, res) => {
       }
 
       // ==================== MOVEMENTS API ====================
+      if (req.method === 'GET' && url.pathname === '/api/movements/sales-summary') {
+        const period = url.searchParams.get('period') || 'today';
+        if (!['today', 'last3', 'all'].includes(period)) {
+          return send(res, 400, { error: 'Periode harus today, last3, atau all.' });
+        }
+        const dateFilter = period === 'today'
+          ? "date(s.sold_at, '+7 hours') = date('now', '+7 hours')"
+          : period === 'last3'
+            ? "date(s.sold_at, '+7 hours') BETWEEN date('now', '+7 hours', '-2 days') AND date('now', '+7 hours')"
+            : '1=1';
+        const items = db.prepare(`
+          SELECT si.product_id, si.sku, si.name,
+            COALESCE(p.unit, 'pcs') unit, COALESCE(p.stock, 0) stock,
+            SUM(si.quantity) sold_quantity, MAX(s.sold_at) latest_sold_at
+          FROM sales s
+          JOIN sale_items si ON si.sale_id=s.id
+          LEFT JOIN products p ON p.id=si.product_id
+          WHERE s.transaction_status='COMPLETED' AND ${dateFilter}
+          GROUP BY si.product_id, si.sku, si.name, p.unit, p.stock
+          ORDER BY sold_quantity DESC, si.name COLLATE NOCASE, si.sku COLLATE NOCASE
+        `).all();
+        const totalQuantity = items.reduce((total, item) => total + item.sold_quantity, 0);
+        return send(res, 200, { period, sku_count: items.length, total_quantity: totalQuantity, items });
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/movements') {
         return send(res, 200, db.prepare('SELECT m.*,p.sku,p.name,p.unit FROM inventory_movements m JOIN products p ON p.id=m.product_id ORDER BY m.created_at DESC,m.id DESC LIMIT 200').all());
       }

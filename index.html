@@ -775,7 +775,7 @@
       <div>
         <div class="eyebrow">LEDGER INVENTARIS</div>
         <h1>Pergerakan stok</h1>
-        <p>Riwayat barang masuk, keluar, penjualan, dan penyesuaian stok.</p>
+        <p>Ringkasan barang terjual per SKU berdasarkan periode, disertai detail pergerakan stok.</p>
       </div>
       <button class="button primary" data-action="new-stock" data-admin-only>＋ <span>Catat pergerakan</span></button>
     </div>
@@ -783,8 +783,32 @@
       <div class="toolbar">
         <div class="search">
           <span>⌕</span>
-          <input id="movementSearch" placeholder="Cari SKU, nama produk, referensi, atau kasir...">
+          <input id="movementSearch" placeholder="Cari SKU atau nama produk...">
         </div>
+        <div class="toolbar-right">
+          <label for="movementSalesPeriod" class="muted">Periode penjualan</label>
+          <select id="movementSalesPeriod" class="filter-select" aria-label="Periode ringkasan barang terjual">
+            <option value="today">Hari ini</option>
+            <option value="last3">3 hari terakhir</option>
+            <option value="all">Semua waktu</option>
+          </select>
+        </div>
+      </div>
+    </section>
+    <section class="panel movement-summary-panel">
+      <div class="panel-head">
+        <div><h2>Barang terjual per SKU</h2><p id="movementSalesSummaryMeta">Memuat ringkasan…</p></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>PRODUK / SKU</th><th>TERJUAL</th><th>STOK TERSISA</th><th>TERAKHIR TERJUAL (WIB)</th></tr></thead>
+          <tbody id="movementSalesSummaryRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel movement-ledger-panel">
+      <div class="panel-head">
+        <div><h2>Riwayat pergerakan terbaru</h2><p>Hingga 200 catatan terbaru. Filter periode hanya berlaku untuk ringkasan barang terjual.</p></div>
       </div>
       <div class="table-wrap">
         <table>
@@ -803,6 +827,6 @@
 <div id="modalHost"></div>
 <div id="toast" class="toast"></div>
 
-<script src="./app-v2.js?v=login-focus-fix-20261029"></script>
+<script src="./app-v2.js?v=stock-summary-20261031"></script>
 </body>
 </html>
