@@ -843,6 +843,7 @@ async function loadSales() {
           </td>
           <td>
             <b>${s.item_count} SKU</b> · ${s.unit_count} unit
+            ${s.sku_list ? `<br><small class="muted">${esc(s.sku_list)}</small>` : ''}
           </td>
           <td>
             <span class="method-tag">${esc(s.payment_method)}</span>
@@ -1008,6 +1009,7 @@ $('#printSalesHistory')?.addEventListener('click', () => {
       <td><b>${esc(s.invoice_no)}</b></td>
       <td>${esc(s.cashier_name || '—')}</td>
       <td>${esc(s.customer_name || 'Pelanggan')}</td>
+      <td>${s.sku_list ? esc(s.sku_list) : '—'}</td>
       <td>${esc(s.payment_method)}</td>
       <td style="text-align:center">${esc(s.payment_status)}</td>
       <td class="num">${rupiah(s.total)}</td>
@@ -1050,6 +1052,7 @@ $('#printSalesHistory')?.addEventListener('click', () => {
         <th>INVOICE</th>
         <th>KASIR</th>
         <th>PELANGGAN</th>
+        <th>SKU PRODUK</th>
         <th>METODE BAYAR</th>
         <th style="text-align:center">STATUS</th>
         <th class="num">TOTAL</th>

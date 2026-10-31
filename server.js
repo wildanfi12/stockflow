@@ -664,7 +664,8 @@ const server = http.createServer(async (req, res) => {
         const paymentStatus = url.searchParams.get('payment_status') || '';
 
         const rows = db.prepare(`
-          SELECT s.*, COUNT(i.id) item_count, COALESCE(SUM(i.quantity),0) unit_count
+          SELECT s.*, COUNT(i.id) item_count, COALESCE(SUM(i.quantity),0) unit_count,
+            COALESCE(GROUP_CONCAT(i.sku, ', '), '') sku_list
           FROM sales s
           LEFT JOIN sale_items i ON i.sale_id=s.id
           WHERE (?='' OR date(s.sold_at, '+7 hours')>=date(?))
@@ -689,6 +690,7 @@ const server = http.createServer(async (req, res) => {
           { title: 'Status Transaksi', val: r => r.transaction_status },
           { title: 'Referensi Pembayaran', val: r => r.payment_ref || '' },
           { title: 'Jumlah SKU', val: r => r.item_count },
+          { title: 'SKU Produk', val: r => r.sku_list },
           { title: 'Total Unit', val: r => r.unit_count },
           { title: 'Subtotal (Rp)', val: r => r.subtotal },
           { title: 'Diskon (Rp)', val: r => r.discount },
@@ -716,7 +718,8 @@ const server = http.createServer(async (req, res) => {
         const q = url.searchParams.get('q') || '';
 
         const rows = db.prepare(`
-          SELECT s.*, COUNT(i.id) item_count, COALESCE(SUM(i.quantity),0) unit_count
+          SELECT s.*, COUNT(i.id) item_count, COALESCE(SUM(i.quantity),0) unit_count,
+            COALESCE(GROUP_CONCAT(i.sku, ', '), '') sku_list
           FROM sales s
           LEFT JOIN sale_items i ON i.sale_id=s.id
           WHERE (?='' OR date(s.sold_at, '+7 hours')>=date(?))
