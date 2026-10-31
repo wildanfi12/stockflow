@@ -1448,7 +1448,7 @@ const server = http.createServer(async (req, res) => {
       // ==================== DASHBOARD API ====================
       if (req.method === 'GET' && url.pathname === '/api/dashboard') {
         const totals = db.prepare(`SELECT COUNT(*) products,COALESCE(SUM(stock),0) units,COALESCE(SUM(CASE WHEN stock<=min_stock THEN 1 ELSE 0 END),0) low_stock,COALESCE(SUM(CASE WHEN stock_verification_status IN ('NEEDS_VERIFICATION','MANUAL_REVIEW') THEN 1 ELSE 0 END),0) verification_count FROM products WHERE active=1`).get();
-        const movements = db.prepare('SELECT m.*,p.sku,p.name,p.unit FROM inventory_movements m JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 8').all();
+        const movements = db.prepare('SELECT m.*,p.sku,p.name,p.unit FROM inventory_movements m JOIN products p ON p.id=m.product_id ORDER BY m.created_at DESC,m.id DESC LIMIT 8').all();
         const imp = importSummary();
         const pending = imp.batch?.status === 'PREVIEW_PENDING';
         const source = imp.summary;
@@ -1475,7 +1475,7 @@ const server = http.createServer(async (req, res) => {
 
       // ==================== MOVEMENTS API ====================
       if (req.method === 'GET' && url.pathname === '/api/movements') {
-        return send(res, 200, db.prepare('SELECT m.*,p.sku,p.name,p.unit FROM inventory_movements m JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 200').all());
+        return send(res, 200, db.prepare('SELECT m.*,p.sku,p.name,p.unit FROM inventory_movements m JOIN products p ON p.id=m.product_id ORDER BY m.created_at DESC,m.id DESC LIMIT 200').all());
       }
 
       if (req.method === 'POST' && url.pathname === '/api/movements') {
@@ -1622,3 +1622,4 @@ process.on('unhandledRejection', err => console.error('Unhandled Rejection:', er
 const port = Number(process.env.PORT || 3001);
 const host = process.env.HOST || '127.0.0.1';
 server.listen(port, host, () => console.log(`Howell StockFlow berjalan di http://${host}:${port}`));
+
