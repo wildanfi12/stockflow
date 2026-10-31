@@ -518,12 +518,12 @@ function generateEAN13() {
 }
 
 function toCsv(rows, columns) {
-  const header = columns.map(c => `"${String(c.title).replace(/"/g, '""')}"`).join(',');
+  const header = columns.map(c => `"${String(c.title).replace(/"/g, '""')}"`).join(';');
   const lines = rows.map(r => columns.map(c => {
     let v = c.val(r);
     if (v === null || v === undefined) v = '';
     return `"${String(v).replace(/"/g, '""')}"`;
-  }).join(','));
+  }).join(';'));
   return '\uFEFF' + [header, ...lines].join('\r\n');
 }
 

@@ -993,7 +993,7 @@ $('#exportSales')?.addEventListener('click', () => {
     payment_status: $('#salesStatusFilter')?.value || '',
     q: $('#salesSearch')?.value || ''
   });
-  window.open(appUrl('/api/sales/export?' + qs.toString()), '_blank');
+  window.location.href = appUrl('/api/sales/export?' + qs.toString());
 });
 
 $('#printSalesHistory')?.addEventListener('click', () => {
@@ -1067,7 +1067,8 @@ $('#printSalesHistory')?.addEventListener('click', () => {
 </html>`);
   w.document.close();
   w.focus();
-  setTimeout(() => w.print(), 350);
+  // Keep the preview open: browser print destinations vary by computer. Users can
+  // explicitly choose Save as PDF, or use the browser's built-in save dialog.
 });
 
 /* ==================== REKONSILIASI PENDAPATAN HARIAN ==================== */
