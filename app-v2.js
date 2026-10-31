@@ -1667,18 +1667,22 @@ async function loadProducts(q = '') {
       $('#productDataNote').textContent = `${pameranCount} SKU dari Excel Pameran · ${catalogCount} SKU katalog lainnya${missingBarcode ? ` · ${missingBarcode} SKU belum memiliki barcode di katalog` : ''}. Stok operasional adalah saldo berjalan; QTY Excel hanya nilai sumber dan tidak menimpa penjualan.`;
     }
     if ($('#productRows')) {
-      $('#productRows').innerHTML = rows.length ? rows.map(p => `
+      $('#productRows').innerHTML = rows.length ? rows.map(p => {
+        const priceData = p.in_latest_exhibition ? p.latest_exhibition_source : p;
+        return `
         <tr>
           <td><div class="product-cell">${productCard(p)}</div></td>
           <td><b>${esc(p.sku)}</b></td>
           <td>${esc(p.barcode || '—')}</td>
           <td>${esc(p.panjang || '—')}</td>
-          <td><div class="stock-stack"><div class="stock-operational"><small>Operasional</small><b>${Number(p.stock).toLocaleString('id-ID')} ${esc(p.unit)}</b></div>${!p.in_latest_exhibition ? '<small class="sub-label">Di luar Excel terbaru</small>' : `<div class="stock-source"><small>QTY Excel</small>${quantity(p.latest_exhibition_source.source_qty, p.stock_verification_status === 'NEEDS_VERIFICATION' || p.stock_verification_status === 'MANUAL_REVIEW')}</div><small>${statusChip(p.stock_verification_status)}</small>`}</div></td>
-          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_unit_price) : '<span class="muted">—</span>'}</td>
-          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_total) : '<span class="muted">—</span>'}</td>
-          <td>${p.in_latest_exhibition ? sourceMoney(p.latest_exhibition_source.source_discount_value) : '<span class="muted">—</span>'}</td>
+          <td><div class="stock-stack"><div class="stock-operational"><small>Operasional</small><b>${Number(p.stock).toLocaleString('id-ID')} ${esc(p.unit)}</b></div>${!p.in_latest_exhibition ? `<small class="sub-label">${String(p.source_file || '').startsWith('Tambahan manual') ? 'Tambahan manual' : 'Di luar Excel terbaru'}</small>` : `<div class="stock-source"><small>QTY Excel</small>${quantity(p.latest_exhibition_source.source_qty, p.stock_verification_status === 'NEEDS_VERIFICATION' || p.stock_verification_status === 'MANUAL_REVIEW')}</div><small>${statusChip(p.stock_verification_status)}</small>`}</div></td>
+          <td>${priceData.dealer_price == null ? '<span class="muted">—</span>' : sourceMoney(priceData.dealer_price)}</td>
+          <td>${sourceMoney(priceData.source_unit_price ?? p.reference_price)}</td>
+          <td>${sourceMoney(priceData.source_total)}</td>
+          <td>${sourceMoney(priceData.source_discount_value)}</td>
           <td>${isAdminUser() ? `<div class="row-actions-group"><button class="edit-btn" title="Edit produk" data-edit="${p.id}">Edit</button><button class="row-action" title="Arsipkan produk" data-archive="${p.id}">×</button></div>` : '<span class="muted">—</span>'}</td>
-        </tr>`).join('') : '<tr><td colspan="9" class="empty-row">Belum ada produk sesuai filter.</td></tr>';
+        </tr>`;
+      }).join('') : '<tr><td colspan="10" class="empty-row">Belum ada produk sesuai filter.</td></tr>';
     }
 
     $$('[data-edit]').forEach(b => b.onclick = () => showEditProductModal(b.dataset.edit));
@@ -1718,6 +1722,7 @@ function showAddProductModal() {
       <div class="field"><label>Satuan</label><select name="unit"><option>pcs</option><option>box</option><option>roll</option><option>set</option></select></div>
       <div class="field"><label>Harga Referensi (Rp)</label><input name="reference_price" type="number" min="0" value="0"></div>
       <div class="field"><label>Harga Jual (Rp)</label><input name="sale_price" type="number" min="0" value="0"></div>
+      <div class="field"><label>Harga Dealer (Rp)</label><input name="dealer_price" type="number" min="0" value=""></div>
       <div class="field"><label>Saldo Awal (Unit)</label><input name="stock" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Stok Minimum</label><input name="min_stock" type="number" min="0" step="1" value="0"></div>
       <div class="field"><label>Lokasi Rak</label><input name="location" placeholder="Opsional"></div>
@@ -1757,6 +1762,7 @@ async function showEditProductModal(id) {
         <div class="field"><label>Satuan</label><select name="unit"><option ${p.unit === 'pcs' ? 'selected' : ''}>pcs</option><option ${p.unit === 'box' ? 'selected' : ''}>box</option><option ${p.unit === 'roll' ? 'selected' : ''}>roll</option><option ${p.unit === 'set' ? 'selected' : ''}>set</option></select></div>
         <div class="field"><label>Harga Referensi (Rp)</label><input name="reference_price" type="number" min="0" value="${p.reference_price || 0}"></div>
         <div class="field"><label>Harga Jual (Rp)</label><input name="sale_price" type="number" min="0" value="${p.sale_price || 0}"></div>
+        <div class="field"><label>Harga Dealer (Rp)</label><input name="dealer_price" type="number" min="0" value="${p.dealer_price ?? ''}"></div>
         <div class="field"><label>Stok Minimum</label><input name="min_stock" type="number" min="0" step="1" value="${p.min_stock || 0}"></div>
         <div class="field"><label>Lokasi Rak</label><input name="location" value="${esc(p.location || '')}"></div>
         <div class="field full"><label>Lokasi Stok Operasional</label><input name="stock_location" value="${esc(p.stock_location || 'Gudang utama')}"></div>

@@ -71,6 +71,7 @@ const productSql = `CREATE TABLE products_new (
  location TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  stock_location TEXT NOT NULL DEFAULT 'Gudang utama', panjang TEXT, source_qty INTEGER,
+ dealer_price INTEGER CHECK(dealer_price IS NULL OR dealer_price>=0),
  source_unit_price INTEGER, source_total INTEGER, source_discount_value INTEGER,
  source_qty_font_color TEXT, source_qty_font_color_type TEXT,
  stock_verification_status TEXT NOT NULL DEFAULT 'NOT_FLAGGED', stock_verification_note TEXT NOT NULL DEFAULT '',
@@ -87,6 +88,7 @@ if (!existingProducts) {
     panjang: 'TEXT',
     stock_location: "TEXT NOT NULL DEFAULT 'Gudang utama'",
     source_qty: 'INTEGER',
+    dealer_price: 'INTEGER CHECK(dealer_price IS NULL OR dealer_price>=0)',
     source_unit_price: 'INTEGER',
     source_total: 'INTEGER',
     source_discount_value: 'INTEGER',
@@ -1334,6 +1336,10 @@ const server = http.createServer(async (req, res) => {
           { title: 'Stok Minimum', val: r => r.min_stock },
           { title: 'Harga Referensi (Rp)', val: r => r.reference_price },
           { title: 'Harga Jual (Rp)', val: r => r.sale_price },
+          { title: 'Harga Dealer (Rp)', val: r => r.dealer_price ?? '' },
+          { title: 'SRP / Harga Dasar (Rp)', val: r => r.source_unit_price ?? r.reference_price },
+          { title: 'TOTAL Sumber (Rp)', val: r => r.source_total ?? '' },
+          { title: 'Harga Diskon 25% (Rp)', val: r => r.source_discount_value ?? '' },
           { title: 'Lokasi Rak', val: r => r.location || '' },
           { title: 'Lokasi Stok', val: r => r.stock_location || '' },
           { title: 'QTY Sumber Excel', val: r => r.source_qty ?? '' },
@@ -1379,20 +1385,21 @@ const server = http.createServer(async (req, res) => {
         const panjang = p.panjang !== undefined ? String(p.panjang).trim() : existing.panjang;
         const refPrice = p.reference_price !== undefined ? Number(p.reference_price) : existing.reference_price;
         const salePrice = p.sale_price !== undefined ? Number(p.sale_price) : existing.sale_price;
+        const dealerPrice = p.dealer_price !== undefined ? (p.dealer_price === '' || p.dealer_price === null ? null : Number(p.dealer_price)) : existing.dealer_price;
         const minStock = p.min_stock !== undefined ? Number(p.min_stock) : existing.min_stock;
         const location = p.location !== undefined ? String(p.location).trim() : existing.location;
         const stockLocation = p.stock_location !== undefined ? String(p.stock_location).trim() : existing.stock_location;
 
-        if (!Number.isSafeInteger(refPrice) || refPrice < 0 || !Number.isSafeInteger(salePrice) || salePrice < 0 || !Number.isSafeInteger(minStock) || minStock < 0) {
+        if (!Number.isSafeInteger(refPrice) || refPrice < 0 || !Number.isSafeInteger(salePrice) || salePrice < 0 || (dealerPrice !== null && (!Number.isSafeInteger(dealerPrice) || dealerPrice < 0)) || !Number.isSafeInteger(minStock) || minStock < 0) {
           return send(res, 400, { error: 'Harga dan stok minimum harus bilangan bulat ≥ 0.' });
         }
 
         db.exec('BEGIN IMMEDIATE');
         try {
-          db.prepare(`UPDATE products SET name=?,category=?,unit=?,barcode=?,panjang=?,reference_price=?,sale_price=?,min_stock=?,location=?,stock_location=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-            .run(name, category, unit, barcode, panjang, refPrice, salePrice, minStock, location, stockLocation, id);
+          db.prepare(`UPDATE products SET name=?,category=?,unit=?,barcode=?,panjang=?,reference_price=?,sale_price=?,dealer_price=?,min_stock=?,location=?,stock_location=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+            .run(name, category, unit, barcode, panjang, refPrice, salePrice, dealerPrice, minStock, location, stockLocation, id);
           db.prepare("INSERT INTO audit_logs(action,entity,entity_id,user_name,details) VALUES('UPDATE_PRODUCT','product',?,?,?)")
-            .run(id, req.authUser.name, JSON.stringify({ name, barcode, panjang, salePrice, refPrice }));
+            .run(id, req.authUser.name, JSON.stringify({ name, barcode, panjang, salePrice, refPrice, dealerPrice }));
           db.exec('COMMIT');
           return send(res, 200, { ok: true, id });
         } catch (e) {
@@ -1415,13 +1422,15 @@ const server = http.createServer(async (req, res) => {
         if (!Number.isSafeInteger(qty) || qty < 0) return send(res, 400, { error: 'Stok harus berupa bilangan bulat aman nol atau lebih.' });
         const rp = Number(p.reference_price || 0), sp = Number(p.sale_price || 0);
         if (!Number.isSafeInteger(rp) || rp < 0 || !Number.isSafeInteger(sp) || sp < 0) return send(res, 400, { error: 'Harga harus berupa Rupiah bulat nol atau lebih.' });
+        const dealerPrice = p.dealer_price === undefined || p.dealer_price === '' || p.dealer_price === null ? null : Number(p.dealer_price);
+        if (dealerPrice !== null && (!Number.isSafeInteger(dealerPrice) || dealerPrice < 0)) return send(res, 400, { error: 'Harga dealer harus berupa Rupiah bulat nol atau lebih.' });
         const minStock = Number(p.min_stock || 0);
         if (!Number.isSafeInteger(minStock) || minStock < 0) return send(res, 400, { error: 'Stok minimum harus berupa bilangan bulat aman nol atau lebih.' });
 
         db.exec('BEGIN IMMEDIATE');
         try {
-          const result = db.prepare(`INSERT INTO products(sku,barcode,name,category,unit,panjang,reference_price,sale_price,stock,min_stock,location,stock_location) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
-            .run(p.sku.trim(), barcode, p.name.trim(), p.category || '', p.unit || 'pcs', p.panjang || '', rp, sp, qty, minStock, p.location || '', p.stock_location || 'Gudang utama');
+          const result = db.prepare(`INSERT INTO products(sku,barcode,name,category,unit,panjang,reference_price,sale_price,dealer_price,stock,min_stock,location,stock_location) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+            .run(p.sku.trim(), barcode, p.name.trim(), p.category || '', p.unit || 'pcs', p.panjang || '', rp, sp, dealerPrice, qty, minStock, p.location || '', p.stock_location || 'Gudang utama');
           if (qty) {
             db.prepare("INSERT INTO inventory_movements(product_id,kind,quantity,balance_after,reference,note,location,user_name) VALUES(?,'opening',?,?,'SALDO-AWAL','Saldo awal dari pembuatan produk',?,?)")
               .run(result.lastInsertRowid, qty, qty, p.stock_location || 'Gudang utama', req.authUser.name);

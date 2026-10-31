@@ -180,3 +180,4 @@
 @media(max-width:650px){.top-actions{gap:7px}.auth-account{display:none}.auth-logout{height:29px;padding:0 6px;font-size:9px}}
 .user.user-admin,.cashier-chip-admin{cursor:pointer}.cashier-fields select:disabled,.field select:disabled{opacity:.85;cursor:not-allowed}
 .movement-summary-panel,.movement-ledger-panel{margin-top:14px}
+.products-table{min-width:1480px}
