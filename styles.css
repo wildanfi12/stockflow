@@ -181,3 +181,6 @@
 .user.user-admin,.cashier-chip-admin{cursor:pointer}.cashier-fields select:disabled,.field select:disabled{opacity:.85;cursor:not-allowed}
 .movement-summary-panel,.movement-ledger-panel{margin-top:14px}
 .products-table{min-width:1480px}
+
+/* Pergerakan stok: tata letak yang ringkas dan mudah dipindai. */
+#movementsPage>.page-heading{margin-bottom:20px}#movementsPage>.panel{border-radius:10px}#movementsPage>.panel:first-of-type .toolbar{padding:13px 16px;gap:14px;flex-wrap:wrap;background:#fcfdfe;border-bottom:1px solid var(--line)}#movementsPage>.panel:first-of-type .search{flex:1;min-width:min(100%,300px)}#movementsPage .movement-summary-panel,#movementsPage .movement-ledger-panel{margin-top:14px}#movementsPage .movement-summary-panel table,#movementsPage .movement-ledger-panel table{min-width:880px}#movementRows td:nth-child(2){min-width:210px;white-space:normal;line-height:1.5}#movementRows td:nth-child(2) b{color:#26313c;font-size:11px}#movementRows td:nth-child(1),#movementRows td:nth-child(3),#movementRows td:nth-child(4),#movementRows td:nth-child(5){white-space:nowrap}#movementsPage .movement-ledger-panel th,#movementsPage .movement-ledger-panel td{padding-left:16px;padding-right:16px}

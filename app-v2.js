@@ -1976,8 +1976,8 @@ function renderMovementRows(rows) {
       <td>${m.kind === 'out' ? '-' : '+'}${m.quantity} ${esc(m.unit)}</td>
       <td>${m.balance_after} ${esc(m.unit)}</td>
       <td>${esc(m.reference)}</td>
-      <td>${esc(m.location)} · ${esc(m.note)}</td>
-    </tr>`).join('') : '<tr><td colspan="7" class="empty-row">Belum ada pergerakan stok sesuai pencarian.</td></tr>';
+
+    </tr>`).join('') : '<tr><td colspan="6" class="empty-row">Belum ada pergerakan stok sesuai pencarian.</td></tr>';
 }
 
 function renderMovementSalesSummary(rows) {
