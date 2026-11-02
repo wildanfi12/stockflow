@@ -542,8 +542,9 @@ const db = new DatabaseSync('/var/lib/howell-stockflow/howell-stockflow.db', { r
 const linesStatement = db.prepare(\`
   SELECT si.sku, MAX(si.name) name, s.discount_rate, si.unit_price srp,
     SUM(si.quantity) quantity, SUM(si.unit_price * si.quantity) before_total,
-    SUM(si.line_total) actual_total
+    SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity
   FROM sales s JOIN sale_items si ON si.sale_id=s.id
+  LEFT JOIN products p ON p.id=si.product_id AND p.active=1
   WHERE s.transaction_status='COMPLETED'
     AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
     AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
@@ -566,15 +567,53 @@ const items = lines.map(line => {
     sku: line.sku,
     srp: line.srp == null ? null : safeNumber(line.srp, 'SRP'),
     quantity: safeNumber(line.quantity, 'Quantity'),
+    stock_quantity: line.stock_quantity == null ? null : safeNumber(line.stock_quantity, 'Stock'),
     discount_rate: rate,
     before_total: line.before_total == null ? null : safeNumber(line.before_total, 'Subtotal'),
     discount20_total: rate === 20 ? actual : null,
     discount25_total: rate === 25 ? actual : null
   };
 });
+const dailyStatement = db.prepare(\`
+  WITH detail AS (
+    SELECT sale_id, SUM(quantity) quantity, SUM(line_total) actual_total
+    FROM sale_items GROUP BY sale_id
+  ), scoped AS (
+    SELECT date(s.sold_at, '+7 hours') day, s.payment_status, s.total,
+      COALESCE(d.quantity, 0) quantity,
+      CASE WHEN d.sale_id IS NULL OR s.total<>d.actual_total
+        OR s.payment_status NOT IN ('LUNAS','PENDING') THEN 1 ELSE 0 END unverified
+    FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
+    WHERE s.transaction_status='COMPLETED'
+      AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
+      AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
+      AND (?='' OR s.cashier_id=?)
+  )
+  SELECT day,
+    SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
+    SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN total ELSE 0 END) revenue,
+    SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
+    SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN total ELSE 0 END) pending_amount,
+    SUM(CASE WHEN unverified=1 THEN 1 ELSE 0 END) unverified_transactions,
+    SUM(CASE WHEN unverified=1 THEN total ELSE 0 END) unverified_amount,
+    SUM(CASE WHEN unverified=0 THEN quantity ELSE 0 END) quantity
+  FROM scoped GROUP BY day ORDER BY day
+\`);
+dailyStatement.setReadBigInts(true);
+const dailyRows = dailyStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId);
+const daily = dailyRows.map(row => ({
+  day: row.day,
+  paid_transactions: safeNumber(row.paid_transactions, 'Paid transaction count'),
+  revenue: safeNumber(row.revenue, 'Daily revenue'),
+  pending_transactions: safeNumber(row.pending_transactions, 'Pending transaction count'),
+  pending_amount: safeNumber(row.pending_amount, 'Pending amount'),
+  unverified_transactions: safeNumber(row.unverified_transactions, 'Unverified transaction count'),
+  unverified_amount: safeNumber(row.unverified_amount, 'Unverified amount'),
+  quantity: safeNumber(row.quantity, 'Daily quantity')
+}));
 const sum = key => items.reduce((total,item) => total + BigInt(item[key] || 0), 0n);
 const result = {
-  from: input.from, to: input.to, cashier_id: input.cashierId, source: 'VPS', items,
+  from: input.from, to: input.to, cashier_id: input.cashierId, source: 'VPS', items, daily,
   summary: {
     row_count: items.length,
     sku_count: new Set(items.map(item => item.sku)).size,
@@ -612,7 +651,7 @@ function readVpsSalesSkuReport(filters) {
       if (code !== 0) return finishError(new Error('Tidak dapat membaca laporan dari VPS. Pastikan SSH alias stockflow-vps dan izin sudo baca-saja tersedia.'));
       try {
         const report = JSON.parse(stdout);
-        if (report.source !== 'VPS' || !Array.isArray(report.items) || !report.summary || !Number.isSafeInteger(report.summary.quantity)) {
+        if (report.source !== 'VPS' || !Array.isArray(report.items) || !Array.isArray(report.daily) || !report.summary || !Number.isSafeInteger(report.summary.quantity)) {
           return finishError(new Error('Respons laporan VPS tidak lengkap atau sumbernya tidak valid.'));
         }
         settled = true;
@@ -1603,8 +1642,9 @@ const server = http.createServer(async (req, res) => {
           SELECT si.sku, MAX(si.name) name, s.discount_rate,
             si.unit_price srp, SUM(si.quantity) quantity,
             SUM(si.unit_price * si.quantity) before_total,
-            SUM(si.line_total) actual_total
+            SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity
           FROM sales s JOIN sale_items si ON si.sale_id=s.id
+          LEFT JOIN products p ON p.id=si.product_id AND p.active=1
           WHERE s.transaction_status='COMPLETED'
             AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
             AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
@@ -1627,14 +1667,52 @@ const server = http.createServer(async (req, res) => {
             sku: line.sku,
             srp: srp == null ? null : safeNumber(srp, 'Harga SRP'),
             quantity: safeNumber(quantity, 'Qty'),
+            stock_quantity: line.stock_quantity == null ? null : safeNumber(BigInt(line.stock_quantity), 'Stok'),
             discount_rate: discountRate,
             before_total: beforeTotal == null ? null : safeNumber(beforeTotal, 'Total sebelum diskon'),
             discount20_total: discountRate === 20 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 20%') : null,
             discount25_total: discountRate === 25 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 25%') : null
           };
         });
+        const dailyStatement = db.prepare(`
+          WITH detail AS (
+            SELECT sale_id,SUM(quantity) quantity,SUM(line_total) actual_total
+            FROM sale_items GROUP BY sale_id
+          ), scoped AS (
+            SELECT date(s.sold_at,'+7 hours') day,s.payment_status,s.total,
+              COALESCE(d.quantity,0) quantity,
+              CASE WHEN d.sale_id IS NULL OR s.total<>d.actual_total
+                OR s.payment_status NOT IN ('LUNAS','PENDING') THEN 1 ELSE 0 END unverified
+            FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
+            WHERE s.transaction_status='COMPLETED'
+              AND (?='' OR date(s.sold_at,'+7 hours')>=date(?))
+              AND (?='' OR date(s.sold_at,'+7 hours')<=date(?))
+              AND (?='' OR s.cashier_id=?)
+          )
+          SELECT day,
+            SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
+            SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN total ELSE 0 END) revenue,
+            SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
+            SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN total ELSE 0 END) pending_amount,
+            SUM(CASE WHEN unverified=1 THEN 1 ELSE 0 END) unverified_transactions,
+            SUM(CASE WHEN unverified=1 THEN total ELSE 0 END) unverified_amount,
+            SUM(CASE WHEN unverified=0 THEN quantity ELSE 0 END) quantity
+          FROM scoped GROUP BY day ORDER BY day
+        `);
+        dailyStatement.setReadBigInts(true);
+        const daily = dailyStatement.all(from, from, to, to, cashierId, cashierId).map(row => ({
+          day: row.day,
+          paid_transactions: safeNumber(BigInt(row.paid_transactions || 0), 'Transaksi lunas harian'),
+          revenue: safeNumber(BigInt(row.revenue || 0), 'Pendapatan harian'),
+          pending_transactions: safeNumber(BigInt(row.pending_transactions || 0), 'Transaksi pending harian'),
+          pending_amount: safeNumber(BigInt(row.pending_amount || 0), 'Nominal pending harian'),
+          unverified_transactions: safeNumber(BigInt(row.unverified_transactions || 0), 'Transaksi perlu verifikasi'),
+          unverified_amount: safeNumber(BigInt(row.unverified_amount || 0), 'Nominal perlu verifikasi'),
+          quantity: safeNumber(BigInt(row.quantity || 0), 'QTY harian')
+        }));
         const sum = key => items.reduce((total, item) => total + BigInt(item[key] ?? 0), 0n);
-        return send(res, 200, { from, to, cashier_id: cashierId, source: 'LOCAL', items, summary: {
+        const source = path.resolve(dataDir) === '/var/lib/howell-stockflow' ? 'VPS' : 'LOCAL';
+        return send(res, 200, { from, to, cashier_id: cashierId, source, items, daily, summary: {
           row_count: items.length,
           sku_count: new Set(items.map(item => item.sku)).size,
           quantity: safeNumber(sum('quantity'), 'Qty laporan'),
