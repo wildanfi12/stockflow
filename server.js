@@ -576,13 +576,16 @@ const items = lines.map(line => {
 });
 const dailyStatement = db.prepare(\`
   WITH detail AS (
-    SELECT sale_id, SUM(quantity) quantity, SUM(line_total) actual_total
+    SELECT sale_id, SUM(quantity) quantity,
+      SUM(unit_price * quantity) before_total, SUM(line_total) actual_total
     FROM sale_items GROUP BY sale_id
   ), scoped AS (
     SELECT date(s.sold_at, '+7 hours') day, s.payment_status, s.total,
       COALESCE(d.quantity, 0) quantity,
-      CASE WHEN d.sale_id IS NULL OR s.total<>d.actual_total
-        OR s.payment_status NOT IN ('LUNAS','PENDING') THEN 1 ELSE 0 END unverified
+      CASE WHEN d.sale_id IS NULL OR s.subtotal<>d.before_total
+        OR s.total<>d.actual_total OR s.discount<>(d.before_total-d.actual_total)
+        OR s.discount_rate NOT IN (0,20,25)
+        OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN') THEN 1 ELSE 0 END unverified
     FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
     WHERE s.transaction_status='COMPLETED'
       AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
@@ -592,11 +595,11 @@ const dailyStatement = db.prepare(\`
   SELECT day,
     SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
     SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN total ELSE 0 END) revenue,
-    SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
-    SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN total ELSE 0 END) pending_amount,
+    SUM(CASE WHEN payment_status='MENUNGGU_PEMBAYARAN' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
+    SUM(CASE WHEN payment_status='MENUNGGU_PEMBAYARAN' AND unverified=0 THEN total ELSE 0 END) pending_amount,
     SUM(CASE WHEN unverified=1 THEN 1 ELSE 0 END) unverified_transactions,
     SUM(CASE WHEN unverified=1 THEN total ELSE 0 END) unverified_amount,
-    SUM(CASE WHEN unverified=0 THEN quantity ELSE 0 END) quantity
+    SUM(quantity) quantity
   FROM scoped GROUP BY day ORDER BY day
 \`);
 dailyStatement.setReadBigInts(true);
@@ -1638,7 +1641,7 @@ const server = http.createServer(async (req, res) => {
         }
         // Report only completed sale lines, using each line's transaction-time
         // price snapshots and the discount rate recorded on its invoice.
-        const lines = db.prepare(`
+        const lineStatement = db.prepare(`
           SELECT si.sku, MAX(si.name) name, s.discount_rate,
             si.unit_price srp, SUM(si.quantity) quantity,
             SUM(si.unit_price * si.quantity) before_total,
@@ -1652,7 +1655,9 @@ const server = http.createServer(async (req, res) => {
             AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
           GROUP BY si.sku, s.discount_rate, si.unit_price
           ORDER BY si.sku COLLATE NOCASE, s.discount_rate, si.unit_price
-        `).all(from, from, to, to, cashierId, cashierId, q, q, q);
+        `);
+        lineStatement.setReadBigInts(true);
+        const lines = lineStatement.all(from, from, to, to, cashierId, cashierId, q, q, q);
         const safeNumber = (value, label) => {
           if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${label} melebihi batas Rupiah integer aman.`);
           return Number(value);
@@ -1676,13 +1681,16 @@ const server = http.createServer(async (req, res) => {
         });
         const dailyStatement = db.prepare(`
           WITH detail AS (
-            SELECT sale_id,SUM(quantity) quantity,SUM(line_total) actual_total
+            SELECT sale_id,SUM(quantity) quantity,
+              SUM(unit_price * quantity) before_total,SUM(line_total) actual_total
             FROM sale_items GROUP BY sale_id
           ), scoped AS (
             SELECT date(s.sold_at,'+7 hours') day,s.payment_status,s.total,
               COALESCE(d.quantity,0) quantity,
-              CASE WHEN d.sale_id IS NULL OR s.total<>d.actual_total
-                OR s.payment_status NOT IN ('LUNAS','PENDING') THEN 1 ELSE 0 END unverified
+              CASE WHEN d.sale_id IS NULL OR s.subtotal<>d.before_total
+                OR s.total<>d.actual_total OR s.discount<>(d.before_total-d.actual_total)
+                OR s.discount_rate NOT IN (0,20,25)
+                OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN') THEN 1 ELSE 0 END unverified
             FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
             WHERE s.transaction_status='COMPLETED'
               AND (?='' OR date(s.sold_at,'+7 hours')>=date(?))
@@ -1692,11 +1700,11 @@ const server = http.createServer(async (req, res) => {
           SELECT day,
             SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
             SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN total ELSE 0 END) revenue,
-            SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
-            SUM(CASE WHEN payment_status='PENDING' AND unverified=0 THEN total ELSE 0 END) pending_amount,
+            SUM(CASE WHEN payment_status='MENUNGGU_PEMBAYARAN' AND unverified=0 THEN 1 ELSE 0 END) pending_transactions,
+            SUM(CASE WHEN payment_status='MENUNGGU_PEMBAYARAN' AND unverified=0 THEN total ELSE 0 END) pending_amount,
             SUM(CASE WHEN unverified=1 THEN 1 ELSE 0 END) unverified_transactions,
             SUM(CASE WHEN unverified=1 THEN total ELSE 0 END) unverified_amount,
-            SUM(CASE WHEN unverified=0 THEN quantity ELSE 0 END) quantity
+            SUM(quantity) quantity
           FROM scoped GROUP BY day ORDER BY day
         `);
         dailyStatement.setReadBigInts(true);
