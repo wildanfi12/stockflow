@@ -3,6 +3,7 @@ node_modules/
 *.db-shm
 data/*.db
 data/*.db-*
+data/backups/
 data/*.json
 *.pem
 *.key

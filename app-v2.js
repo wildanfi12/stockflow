@@ -93,7 +93,9 @@ $('#authForm')?.addEventListener('submit', async event => {
     await initUsers();
     loadDashboard();
   } catch (e) {
-    error.textContent = e.message;
+    error.textContent = e instanceof TypeError
+      ? 'Server StockFlow tidak tersambung. Jalankan aplikasi lokal melalui “Buka Howell StockFlow.bat”, lalu coba lagi.'
+      : e.message;
     error.hidden = false;
     $('#authPassword').focus();
   } finally { submit.disabled = false; }
@@ -158,17 +160,17 @@ function updateUserDisplay() {
   const identity = selectedCashier();
   const initials = identity.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'HW';
   if ($('#currentCashierName')) $('#currentCashierName').textContent = identity.name;
-  if ($('#currentCashierRole')) $('#currentCashierRole').textContent = identity.role === 'admin' ? 'Administrator' : `Kasir Aktif (ID: ${identity.id})`;
+  if ($('#currentCashierRole')) $('#currentCashierRole').textContent = allUsers.length <= 1 ? 'Akun operasional tunggal' : (identity.role === 'admin' ? 'Administrator' : `Kasir Aktif (ID: ${identity.id})`);
   if ($('#currentAvatar')) $('#currentAvatar').textContent = initials;
-  if ($('#topCashierName')) $('#topCashierName').textContent = authenticatedUser?.role === 'admin' ? 'Admin' : identity.name;
+  if ($('#topCashierName')) $('#topCashierName').textContent = identity.name;
   if ($('#topAvatar')) $('#topAvatar').textContent = initials;
   if ($('#userSwitcher')) {
-    $('#userSwitcher').title = authenticatedUser?.role === 'admin' ? 'Akun Admin · pilih petugas transaksi' : 'Kasir sesuai akun yang masuk';
-    $('#userSwitcher').classList.toggle('user-admin', authenticatedUser?.role === 'admin');
+    $('#userSwitcher').title = allUsers.length <= 1 ? 'Faiz adalah satu-satunya akun aktif' : 'Pilih kasir yang bertugas';
+    $('#userSwitcher').classList.toggle('user-admin', authenticatedUser?.role === 'admin' && allUsers.length > 1);
   }
   if ($('#topCashierChip')) {
-    $('#topCashierChip').title = authenticatedUser?.role === 'admin' ? 'Akun Admin · klik untuk memilih petugas transaksi' : 'Kasir yang sedang bertugas';
-    $('#topCashierChip').classList.toggle('cashier-chip-admin', authenticatedUser?.role === 'admin');
+    $('#topCashierChip').title = allUsers.length <= 1 ? 'Faiz adalah satu-satunya akun aktif' : 'Klik untuk memilih kasir yang bertugas';
+    $('#topCashierChip').classList.toggle('cashier-chip-admin', authenticatedUser?.role === 'admin' && allUsers.length > 1);
   }
   if ($('#closeReconciledBy') && !$('#closeReconciledBy').value) {
     $('#closeReconciledBy').value = authenticatedUser?.role === 'admin' ? authenticatedUser.name : activeCashier.name;
@@ -192,6 +194,11 @@ function populateCashierSelects() {
   if ($('#salesCashierFilter')) {
     $('#salesCashierFilter').innerHTML = '<option value="">Semua Kasir</option>' + options;
   }
+  if ($('#skuReportCashier')) {
+    const selected = $('#skuReportCashier').value;
+    $('#skuReportCashier').innerHTML = '<option value="">Semua Kasir</option>' + options;
+    $('#skuReportCashier').value = visibleUsers.some(u => String(u.id) === selected) ? selected : '';
+  }
   if ($('#closeCashierSelect')) {
     const select = $('#closeCashierSelect');
     select.innerHTML = options;
@@ -203,6 +210,7 @@ function populateCashierSelects() {
 }
 
 function showUserSwitcherModal() {
+  if (allUsers.length <= 1) return;
   if (authenticatedUser?.role === 'kasir') return notify('Kasir aktif mengikuti akun login. Untuk berpindah kasir, keluar lalu masuk dengan akun kasir yang sesuai.');
   modal('Ganti Kasir Bertugas', `
     <div style="font-size:12px;color:#556575;margin-bottom:12px">
@@ -240,6 +248,7 @@ const titles = {
   dashboard: 'Dashboard',
   scan: 'Kasir / Scan Transaksi',
   sales: 'Riwayat Penjualan & Invoice',
+  salesSkuReport: 'Laporan Penjualan',
   reconciliation: 'Rekonsiliasi Pendapatan Harian',
   closing: 'Penutupan Kasir Harian',
   products: 'Produk & SKU',
@@ -262,6 +271,7 @@ function showPage(name) {
       updateCartTotals();
     },
     sales: loadSales,
+    salesSkuReport: loadSalesSkuReport,
     reconciliation: () => loadReconciliation(),
     closing: () => loadClosing(),
     products: () => loadProducts($('#productSearch')?.value || ''),
@@ -982,6 +992,109 @@ $('#filterSales')?.addEventListener('click', loadSales);
 $('#salesSearch')?.addEventListener('input', () => {
   clearTimeout(window._searchSalesTimer);
   window._searchSalesTimer = setTimeout(loadSales, 300);
+});
+
+let salesSkuReportRows = [];
+let salesSkuReportSummary = {};
+function formatSalesReportDate(value) {
+  if (!value) return '';
+  const date = new Date(`${value}T12:00:00Z`);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+}
+function updateSalesReportDayButtons() {
+  const from = $('#skuReportFrom')?.value || '';
+  const to = $('#skuReportTo')?.value || '';
+  document.querySelectorAll('[data-sales-report-day]').forEach(button => {
+    const selected = from === button.dataset.salesReportDay && to === button.dataset.salesReportDay;
+    button.setAttribute('aria-pressed', String(selected));
+    button.classList.toggle('active', selected);
+  });
+}
+async function loadSalesSkuReport() {
+  if (!$('#skuReportRows')) return;
+  const params = new URLSearchParams();
+  const from = $('#skuReportFrom')?.value || '', to = $('#skuReportTo')?.value || '';
+  const cashier = $('#skuReportCashier')?.value || '', q = $('#skuReportSearch')?.value.trim() || '';
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (cashier) params.set('cashier_id', cashier);
+  if (q) params.set('q', q);
+  $('#skuReportRows').innerHTML = '<tr><td colspan="7" class="empty-row">Memuat laporan…</td></tr>';
+  try {
+    const report = await api('/api/sales/sku-report?' + params.toString());
+    salesSkuReportRows = report.items;
+    salesSkuReportSummary = report.summary;
+    updateSalesReportDayButtons();
+    $('#skuReportMeta').textContent = `${Number(report.summary.sku_count).toLocaleString('id-ID')} SKU terjual · ${Number(report.summary.row_count).toLocaleString('id-ID')} baris SKU/diskon/harga · QTY ${Number(report.summary.quantity).toLocaleString('id-ID')} · transaksi selesai · sumber ${report.source === 'VPS' ? 'online' : 'lokal'}${from || to ? ` · ${from ? formatSalesReportDate(from) : 'awal'} s/d ${to ? formatSalesReportDate(to) : 'sekarang'} WIB` : ' · semua periode'}`;
+    $('#skuReportMissingPrice').textContent = report.summary.missing_srp_count ? `${report.summary.missing_srp_count} baris tidak memiliki SRP katalog.` : '';
+    $('#skuReportRows').innerHTML = report.items.length ? report.items.map(item => `
+      <tr><td><b>${esc(item.sku)}</b></td>
+      <td>${item.discount_rate ? `Diskon ${Number(item.discount_rate)}%` : '<span class="muted">Tanpa diskon</span>'}</td>
+      <td class="num">${item.srp == null ? '<span class="muted">Tidak tersedia</span>' : rupiah(item.srp)}</td>
+      <td class="num">${Number(item.quantity).toLocaleString('id-ID')}</td>
+      <td class="num">${item.before_total == null ? '<span class="muted">Tidak tersedia</span>' : rupiah(item.before_total)}</td>
+      <td class="num">${item.discount20_total == null ? '—' : rupiah(item.discount20_total)}</td>
+      <td class="num">${item.discount25_total == null ? '—' : rupiah(item.discount25_total)}</td></tr>`).join('') : '<tr><td colspan="7" class="empty-row">Tidak ada SKU terjual pada filter ini.</td></tr>';
+  } catch (error) {
+    $('#skuReportMeta').textContent = 'Laporan gagal dimuat.';
+    $('#skuReportRows').innerHTML = `<tr><td colspan="7" class="empty-row">${esc(error.message)}</td></tr>`;
+  }
+}
+$('#applySkuReport')?.addEventListener('click', loadSalesSkuReport);
+$('#skuReportCashier')?.addEventListener('change', loadSalesSkuReport);
+document.querySelectorAll('[data-sales-report-day]').forEach(button => button.addEventListener('click', () => {
+  const date = button.dataset.salesReportDay;
+  $('#skuReportFrom').value = date;
+  $('#skuReportTo').value = date;
+  updateSalesReportDayButtons();
+  loadSalesSkuReport();
+}));
+['#skuReportFrom', '#skuReportTo'].forEach(selector => $(selector)?.addEventListener('change', updateSalesReportDayButtons));
+$('#skuReportSearch')?.addEventListener('input', () => {
+  clearTimeout(window._skuReportTimer);
+  window._skuReportTimer = setTimeout(loadSalesSkuReport, 300);
+});
+function csvCell(value) { return '"' + String(value ?? '').replace(/"/g, '""') + '"'; }
+$('#exportSalesSkuCsv')?.addEventListener('click', () => {
+  const columns = [
+    ['SKU', 'sku'], ['Diskon 25%', 'discount_rate'], ['Harga SRP per Unit (Rp)', 'srp'], ['QTY', 'quantity'],
+    ['Total Harga sebelum Diskon (Rp)', 'before_total'], ['Total setelah Diskon 20% (Rp)', 'discount20_total'],
+    ['Total setelah Diskon (Rp)', 'discount25_total']
+  ];
+  const csvRows = [
+    ['Sumber data', 'Riwayat online StockFlow (VPS)'],
+    ['Periode WIB', `${$('#skuReportFrom')?.value ? formatSalesReportDate($('#skuReportFrom').value) : 'awal'} s/d ${$('#skuReportTo')?.value ? formatSalesReportDate($('#skuReportTo').value) : 'sekarang'}`],
+    ['QTY terjual', salesSkuReportSummary.quantity || 0],
+    ['Total harga sebelum diskon', salesSkuReportSummary.before_total ?? 'Perlu verifikasi'],
+    ['Total harga setelah Diskon 20%', salesSkuReportSummary.discount20_total ?? 'Tidak tersedia'],
+    ['Total harga setelah Diskon 25%', salesSkuReportSummary.discount25_total ?? 'Tidak tersedia'],
+    [],
+    columns.map(([label]) => label),
+    ...salesSkuReportRows.map(row => columns.map(([, key]) => key === 'discount_rate' ? (row[key] || '') : row[key] ?? ''))
+  ];
+  const csv = '\uFEFF' + csvRows.map(row => row.map(csvCell).join(',')).join('\r\n');
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  link.download = 'laporan-penjualan.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
+$('#printSalesSkuPdf')?.addEventListener('click', () => {
+  if (!salesSkuReportRows.length) return notify('Tidak ada data laporan untuk dicetak.');
+  const win = window.open('', '_blank');
+  if (!win) return notify('Izinkan pop-up browser untuk mencetak atau menyimpan PDF.');
+  const fromLabel = $('#skuReportFrom').value ? formatSalesReportDate($('#skuReportFrom').value) : 'awal';
+  const toLabel = $('#skuReportTo').value ? formatSalesReportDate($('#skuReportTo').value) : ($('#skuReportFrom').value ? 'sekarang' : 'semua');
+  const dataRows = salesSkuReportRows.map(row => `<tr>${[
+    row.sku, row.discount_rate ? `Diskon ${row.discount_rate}%` : 'Tanpa diskon',
+    row.srp == null ? 'Tidak tersedia' : rupiah(row.srp), Number(row.quantity).toLocaleString('id-ID'),
+    row.before_total == null ? 'Tidak tersedia' : rupiah(row.before_total),
+    row.discount20_total == null ? '—' : rupiah(row.discount20_total),
+    row.discount25_total == null ? '—' : rupiah(row.discount25_total)
+  ].map(value => `<td>${esc(value)}</td>`).join('')}</tr>`).join('');
+  win.document.write(`<!doctype html><html lang="id"><meta charset="utf-8"><title>Laporan Penjualan Howell</title><style>@page{size:A4 landscape;margin:10mm}body{font:10px Arial;color:#102033}header{display:flex;justify-content:space-between;border-bottom:2px solid #102033;padding-bottom:8px;margin-bottom:12px}h1{font-size:18px;margin:0}p{color:#596979}table{width:100%;border-collapse:collapse;font-size:9px}th{background:#edf2f7;text-align:left}td,th{border:1px solid #d9e1e8;padding:6px}tr{break-inside:avoid}.actions{margin:10px 0}@media print{.actions{display:none}}</style><header><div><h1>HOWELL OFFICIAL STORE</h1><p>Laporan Penjualan online dari VPS · ${esc(fromLabel)} s/d ${esc(toLabel)} WIB</p><p>Nilai sebelum dan setelah diskon mengikuti snapshot rincian transaksi, bukan simulasi harga katalog.</p></div><div>QTY ${Number(salesSkuReportSummary.quantity || 0).toLocaleString('id-ID')} · Sebelum ${salesSkuReportSummary.before_total == null ? 'Tidak tersedia' : rupiah(salesSkuReportSummary.before_total)} · Aktual diskon 20% ${rupiah(salesSkuReportSummary.discount20_total || 0)} · Aktual diskon 25% ${rupiah(salesSkuReportSummary.discount25_total || 0)}</div></header><div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><table><thead><tr>${['SKU','DISKON 25%','HARGA SRP / UNIT','QTY TERJUAL','TOTAL HARGA SEBELUM DISKON','TOTAL SETELAH DISKON 20%','TOTAL SETELAH DISKON'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dataRows}</tbody></table></html>`);
+  win.document.close();
 });
 
 $('#exportSales')?.addEventListener('click', () => {
@@ -2032,6 +2145,7 @@ async function refreshVisiblePage() {
   const refreshers = {
     dashboard: loadDashboard,
     sales: loadSales,
+    salesSkuReport: loadSalesSkuReport,
     reconciliation: () => loadReconciliation(),
     closing: () => loadClosing({ preserveInputs: true }),
     products: () => loadProducts($('#productSearch')?.value || ''),

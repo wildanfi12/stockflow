@@ -1,6 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { randomBytes, createHash, scrypt: scryptCallback, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
 const { DatabaseSync } = require('node:sqlite');
@@ -30,10 +31,9 @@ const userByUsername = db.prepare('SELECT id FROM users WHERE username=?');
 const userById = db.prepare('SELECT id FROM users WHERE id=?');
 const insertUser = db.prepare('INSERT INTO users (id, username, name, role, active) VALUES (?, ?, ?, ?, 1)');
 for (const user of [
-  { id: 1, username: 'admin', name: 'Admin', role: 'admin' },
-  { id: 2, username: 'faiz', name: 'Faiz', role: 'kasir' },
-  { id: 3, username: 'nick', name: 'Nick', role: 'kasir' },
-  { id: 4, username: 'aris', name: 'Aris', role: 'kasir' }
+  // One active StockFlow identity: Faiz. Keep admin/Nick/Aris rows for foreign
+  // keys and historical attribution, but do not allow them to authenticate.
+  { id: 2, username: 'faiz', name: 'Faiz', role: 'admin' }
 ]) {
   const existing = userByUsername.get(user.username);
   if (existing) {
@@ -46,8 +46,9 @@ for (const user of [
     insertUser.run(user.id, user.username, user.name, user.role);
   }
 }
-// Admin can authenticate, but is intentionally excluded from cashier lists.
-db.prepare("UPDATE users SET active=CASE WHEN username IN ('admin','faiz','nick','aris') THEN 1 ELSE 0 END").run();
+// Faiz is the sole active account and retains administrator permissions so the
+// existing inventory, reports, and reconciliation workflows remain usable.
+db.prepare("UPDATE users SET active=CASE WHEN username='faiz' THEN 1 ELSE 0 END, role=CASE WHEN username='faiz' THEN 'admin' ELSE role END").run();
 const userCols = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
 if (!userCols.has('password_salt')) db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT');
 if (!userCols.has('password_hash')) db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
 DELETE FROM auth_sessions WHERE expires_at <= CAST(strftime('%s','now') AS INTEGER);
+DELETE FROM auth_sessions WHERE user_id IN (SELECT id FROM users WHERE active=0);
 `);
 
 // 2. Products Table
@@ -531,6 +533,96 @@ function toCsv(rows, columns) {
 
 const listProducts = (q = '') => db.prepare(`SELECT * FROM products WHERE active=1 AND (?='' OR sku LIKE ? OR barcode LIKE ? OR name LIKE ? OR category LIKE ?) ORDER BY updated_at DESC`).all(q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
 const latestBatch = () => db.prepare('SELECT * FROM import_batches ORDER BY id DESC LIMIT 1').get();
+
+const vpsSalesReportScript = `
+const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const db = new DatabaseSync('/var/lib/howell-stockflow/howell-stockflow.db', { readOnly: true });
+const linesStatement = db.prepare(\`
+  SELECT si.sku, MAX(si.name) name, s.discount_rate, si.unit_price srp,
+    SUM(si.quantity) quantity, SUM(si.unit_price * si.quantity) before_total,
+    SUM(si.line_total) actual_total
+  FROM sales s JOIN sale_items si ON si.sale_id=s.id
+  WHERE s.transaction_status='COMPLETED'
+    AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
+    AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
+    AND (?='' OR s.cashier_id=?)
+    AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
+  GROUP BY si.sku,s.discount_rate,si.unit_price
+  ORDER BY si.sku COLLATE NOCASE,s.discount_rate,si.unit_price
+\`);
+linesStatement.setReadBigInts(true);
+const lines = linesStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId,input.q,input.q,input.q);
+const safeNumber = (value, label) => {
+  const integer = typeof value === 'bigint' ? value : BigInt(value || 0);
+  if (integer < 0n || integer > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(label + ' exceeds the safe integer limit');
+  return Number(integer);
+};
+const items = lines.map(line => {
+  const rate = Number(line.discount_rate || 0);
+  const actual = line.actual_total == null ? null : safeNumber(line.actual_total, 'Sale total');
+  return {
+    sku: line.sku,
+    srp: line.srp == null ? null : safeNumber(line.srp, 'SRP'),
+    quantity: safeNumber(line.quantity, 'Quantity'),
+    discount_rate: rate,
+    before_total: line.before_total == null ? null : safeNumber(line.before_total, 'Subtotal'),
+    discount20_total: rate === 20 ? actual : null,
+    discount25_total: rate === 25 ? actual : null
+  };
+});
+const sum = key => items.reduce((total,item) => total + BigInt(item[key] || 0), 0n);
+const result = {
+  from: input.from, to: input.to, cashier_id: input.cashierId, source: 'VPS', items,
+  summary: {
+    row_count: items.length,
+    sku_count: new Set(items.map(item => item.sku)).size,
+    quantity: safeNumber(sum('quantity'), 'Report quantity'),
+    before_total: items.some(item => item.before_total == null) ? null : safeNumber(sum('before_total'), 'Report subtotal'),
+    discount20_total: safeNumber(sum('discount20_total'), '20 percent total'),
+    discount25_total: safeNumber(sum('discount25_total'), '25 percent total'),
+    missing_srp_count: items.filter(item => item.srp == null).length
+  }
+};
+db.close();
+process.stdout.write(JSON.stringify(result));
+`;
+
+function readVpsSalesSkuReport(filters) {
+  const target = String(process.env.STOCKFLOW_VPS_SSH_TARGET || 'stockflow-vps');
+  if (!/^[A-Za-z0-9_.@-]{1,120}$/.test(target)) return Promise.reject(new Error('Target SSH VPS tidak valid.'));
+  const encodedScript = Buffer.from(vpsSalesReportScript, 'utf8').toString('base64');
+  const remoteCommand = `sudo -n /opt/node-v24/bin/node -e 'eval(Buffer.from("${encodedScript}","base64").toString())'`;
+  return new Promise((resolve, reject) => {
+    const child = spawn('ssh', ['-o','BatchMode=yes','-o','ConnectTimeout=8',target,remoteCommand], {
+      windowsHide: true, stdio: ['pipe','pipe','pipe']
+    });
+    let stdout = '', stderr = '', settled = false;
+    const finishError = error => { if (settled) return; settled = true; clearTimeout(timer); reject(error); };
+    const timer = setTimeout(() => { child.kill(); finishError(new Error('Koneksi baca data VPS melewati batas waktu.')) }, 12000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 2_000_000) child.kill(); });
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
+    child.on('error', () => finishError(new Error('Perintah SSH tidak tersedia pada komputer ini.')));
+    child.on('close', code => {
+      if (settled) return;
+      clearTimeout(timer);
+      if (code !== 0) return finishError(new Error('Tidak dapat membaca laporan dari VPS. Pastikan SSH alias stockflow-vps dan izin sudo baca-saja tersedia.'));
+      try {
+        const report = JSON.parse(stdout);
+        if (report.source !== 'VPS' || !Array.isArray(report.items) || !report.summary || !Number.isSafeInteger(report.summary.quantity)) {
+          return finishError(new Error('Respons laporan VPS tidak lengkap atau sumbernya tidak valid.'));
+        }
+        settled = true;
+        resolve(report);
+      }
+      catch { finishError(new Error('Respons laporan dari VPS tidak dapat dibaca.')); }
+    });
+    child.stdin.end(JSON.stringify(filters));
+  });
+}
 
 function importSummary() {
   const b = latestBatch();
@@ -1483,6 +1575,76 @@ const server = http.createServer(async (req, res) => {
       }
 
       // ==================== MOVEMENTS API ====================
+      if (req.method === 'GET' && url.pathname === '/api/sales/sku-report') {
+        const from = url.searchParams.get('from') || '';
+        const to = url.searchParams.get('to') || '';
+        const q = (url.searchParams.get('q') || '').trim();
+        const cashierId = req.authUser.role === 'kasir' ? String(req.authUser.id) : (url.searchParams.get('cashier_id') || '');
+        const validDate = value => {
+          if (!value) return true;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+          const parsed = new Date(value + 'T00:00:00Z');
+          return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+        };
+        if (!validDate(from) || !validDate(to) || (from && to && from > to)) {
+          return send(res, 400, { error: 'Rentang tanggal laporan tidak valid.' });
+        }
+        if (process.env.SALES_REPORT_SOURCE === 'vps') {
+          try {
+            const report = await readVpsSalesSkuReport({ from, to, cashierId, q });
+            return send(res, 200, report);
+          } catch (error) {
+            return send(res, 503, { error: error.message || 'Laporan online VPS sementara tidak tersedia.' });
+          }
+        }
+        // Report only completed sale lines, using each line's transaction-time
+        // price snapshots and the discount rate recorded on its invoice.
+        const lines = db.prepare(`
+          SELECT si.sku, MAX(si.name) name, s.discount_rate,
+            si.unit_price srp, SUM(si.quantity) quantity,
+            SUM(si.unit_price * si.quantity) before_total,
+            SUM(si.line_total) actual_total
+          FROM sales s JOIN sale_items si ON si.sale_id=s.id
+          WHERE s.transaction_status='COMPLETED'
+            AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
+            AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
+            AND (?='' OR s.cashier_id=?)
+            AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
+          GROUP BY si.sku, s.discount_rate, si.unit_price
+          ORDER BY si.sku COLLATE NOCASE, s.discount_rate, si.unit_price
+        `).all(from, from, to, to, cashierId, cashierId, q, q, q);
+        const safeNumber = (value, label) => {
+          if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${label} melebihi batas Rupiah integer aman.`);
+          return Number(value);
+        };
+        const items = lines.map(line => {
+          const quantity = BigInt(line.quantity);
+          const srp = line.srp == null ? null : BigInt(line.srp);
+          const beforeTotal = line.before_total == null ? null : BigInt(line.before_total);
+          const actualTotal = line.actual_total == null ? null : BigInt(line.actual_total);
+          const discountRate = Number(line.discount_rate || 0);
+          return {
+            sku: line.sku,
+            srp: srp == null ? null : safeNumber(srp, 'Harga SRP'),
+            quantity: safeNumber(quantity, 'Qty'),
+            discount_rate: discountRate,
+            before_total: beforeTotal == null ? null : safeNumber(beforeTotal, 'Total sebelum diskon'),
+            discount20_total: discountRate === 20 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 20%') : null,
+            discount25_total: discountRate === 25 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 25%') : null
+          };
+        });
+        const sum = key => items.reduce((total, item) => total + BigInt(item[key] ?? 0), 0n);
+        return send(res, 200, { from, to, cashier_id: cashierId, source: 'LOCAL', items, summary: {
+          row_count: items.length,
+          sku_count: new Set(items.map(item => item.sku)).size,
+          quantity: safeNumber(sum('quantity'), 'Qty laporan'),
+          before_total: items.some(item => item.before_total == null) ? null : safeNumber(sum('before_total'), 'Total sebelum diskon'),
+          discount20_total: safeNumber(sum('discount20_total'), 'Total penjualan diskon 20%'),
+          discount25_total: safeNumber(sum('discount25_total'), 'Total penjualan diskon 25%'),
+          missing_srp_count: items.filter(item => item.srp == null).length
+        }});
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/movements/sales-summary') {
         const period = url.searchParams.get('period') || 'today';
         if (!['today', 'last3', 'all'].includes(period)) {
