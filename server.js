@@ -540,9 +540,13 @@ const { DatabaseSync } = require('node:sqlite');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const db = new DatabaseSync('/var/lib/howell-stockflow/howell-stockflow.db', { readOnly: true });
 const linesStatement = db.prepare(\`
-  SELECT si.sku, MAX(si.name) name, s.discount_rate, si.unit_price srp,
+  SELECT si.sku, MAX(si.name) name,
+    CASE WHEN lower(COALESCE(s.notes,'')) LIKE '%lelang%' THEN 'LELANG' ELSE 'PENJUALAN' END sale_type,
+    s.discount_rate, si.unit_price srp,
     SUM(si.quantity) quantity, SUM(si.unit_price * si.quantity) before_total,
-    SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity
+    SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity,
+    MAX(CASE WHEN lower(COALESCE(s.notes,'')) LIKE '%pelunasan belum dikonfirmasi%'
+      OR lower(COALESCE(s.notes,'')) LIKE '%menunggu pembayaran%' THEN 1 ELSE 0 END) needs_verification
   FROM sales s JOIN sale_items si ON si.sale_id=s.id
   LEFT JOIN products p ON p.id=si.product_id AND p.active=1
   WHERE s.transaction_status='COMPLETED'
@@ -550,7 +554,7 @@ const linesStatement = db.prepare(\`
     AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
     AND (?='' OR s.cashier_id=?)
     AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
-  GROUP BY si.sku,s.discount_rate,si.unit_price
+  GROUP BY si.sku,s.discount_rate,si.unit_price,sale_type
   ORDER BY si.sku COLLATE NOCASE,s.discount_rate,si.unit_price
 \`);
 linesStatement.setReadBigInts(true);
@@ -565,11 +569,14 @@ const items = lines.map(line => {
   const actual = line.actual_total == null ? null : safeNumber(line.actual_total, 'Sale total');
   return {
     sku: line.sku,
+    sale_type: line.sale_type,
     srp: line.srp == null ? null : safeNumber(line.srp, 'SRP'),
     quantity: safeNumber(line.quantity, 'Quantity'),
     stock_quantity: line.stock_quantity == null ? null : safeNumber(line.stock_quantity, 'Stock'),
     discount_rate: rate,
     before_total: line.before_total == null ? null : safeNumber(line.before_total, 'Subtotal'),
+    actual_total: line.actual_total == null ? null : safeNumber(line.actual_total, 'Actual sale total'),
+    needs_verification: Number(line.needs_verification) === 1,
     discount20_total: rate === 20 ? actual : null,
     discount25_total: rate === 25 ? actual : null
   };
@@ -585,7 +592,9 @@ const dailyStatement = db.prepare(\`
       CASE WHEN d.sale_id IS NULL OR s.subtotal<>d.before_total
         OR s.total<>d.actual_total OR s.discount<>(d.before_total-d.actual_total)
         OR s.discount_rate NOT IN (0,20,25)
-        OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN') THEN 1 ELSE 0 END unverified
+        OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN')
+        OR lower(COALESCE(s.notes,'')) LIKE '%pelunasan belum dikonfirmasi%'
+        OR lower(COALESCE(s.notes,'')) LIKE '%menunggu pembayaran%' THEN 1 ELSE 0 END unverified
     FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
     WHERE s.transaction_status='COMPLETED'
       AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
@@ -1642,10 +1651,14 @@ const server = http.createServer(async (req, res) => {
         // Report only completed sale lines, using each line's transaction-time
         // price snapshots and the discount rate recorded on its invoice.
         const lineStatement = db.prepare(`
-          SELECT si.sku, MAX(si.name) name, s.discount_rate,
+          SELECT si.sku, MAX(si.name) name,
+            CASE WHEN lower(COALESCE(s.notes,'')) LIKE '%lelang%' THEN 'LELANG' ELSE 'PENJUALAN' END sale_type,
+            s.discount_rate,
             si.unit_price srp, SUM(si.quantity) quantity,
             SUM(si.unit_price * si.quantity) before_total,
-            SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity
+            SUM(si.line_total) actual_total, MAX(p.stock) stock_quantity,
+            MAX(CASE WHEN lower(COALESCE(s.notes,'')) LIKE '%pelunasan belum dikonfirmasi%'
+              OR lower(COALESCE(s.notes,'')) LIKE '%menunggu pembayaran%' THEN 1 ELSE 0 END) needs_verification
           FROM sales s JOIN sale_items si ON si.sale_id=s.id
           LEFT JOIN products p ON p.id=si.product_id AND p.active=1
           WHERE s.transaction_status='COMPLETED'
@@ -1653,7 +1666,7 @@ const server = http.createServer(async (req, res) => {
             AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
             AND (?='' OR s.cashier_id=?)
             AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
-          GROUP BY si.sku, s.discount_rate, si.unit_price
+          GROUP BY si.sku, s.discount_rate, si.unit_price, sale_type
           ORDER BY si.sku COLLATE NOCASE, s.discount_rate, si.unit_price
         `);
         lineStatement.setReadBigInts(true);
@@ -1670,11 +1683,14 @@ const server = http.createServer(async (req, res) => {
           const discountRate = Number(line.discount_rate || 0);
           return {
             sku: line.sku,
+            sale_type: line.sale_type,
             srp: srp == null ? null : safeNumber(srp, 'Harga SRP'),
             quantity: safeNumber(quantity, 'Qty'),
             stock_quantity: line.stock_quantity == null ? null : safeNumber(BigInt(line.stock_quantity), 'Stok'),
             discount_rate: discountRate,
             before_total: beforeTotal == null ? null : safeNumber(beforeTotal, 'Total sebelum diskon'),
+            actual_total: actualTotal == null ? null : safeNumber(actualTotal, 'Total aktual penjualan'),
+            needs_verification: Number(line.needs_verification) === 1,
             discount20_total: discountRate === 20 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 20%') : null,
             discount25_total: discountRate === 25 && actualTotal != null ? safeNumber(actualTotal, 'Total penjualan diskon 25%') : null
           };
@@ -1690,7 +1706,9 @@ const server = http.createServer(async (req, res) => {
               CASE WHEN d.sale_id IS NULL OR s.subtotal<>d.before_total
                 OR s.total<>d.actual_total OR s.discount<>(d.before_total-d.actual_total)
                 OR s.discount_rate NOT IN (0,20,25)
-                OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN') THEN 1 ELSE 0 END unverified
+                OR s.payment_status NOT IN ('LUNAS','MENUNGGU_PEMBAYARAN')
+                OR lower(COALESCE(s.notes,'')) LIKE '%pelunasan belum dikonfirmasi%'
+                OR lower(COALESCE(s.notes,'')) LIKE '%menunggu pembayaran%' THEN 1 ELSE 0 END unverified
             FROM sales s LEFT JOIN detail d ON d.sale_id=s.id
             WHERE s.transaction_status='COMPLETED'
               AND (?='' OR date(s.sold_at,'+7 hours')>=date(?))

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Howell StockFlow — Inventory, POS & Rekonsiliasi</title>
-  <link rel="stylesheet" href="./styles.css?v=sales-report-audit-20261102-2">
+  <link rel="stylesheet" href="./styles.css?v=sales-report-auction-20261105-1">
 </head>
 <body>
   <section class="auth-gate" id="authGate" aria-labelledby="authTitle">
@@ -344,7 +344,7 @@
   <!-- ==================== LAPORAN PENJUALAN PER SKU ==================== -->
   <section class="page hidden" id="salesSkuReportPage">
     <div class="page-heading">
-      <div><div class="eyebrow">LAPORAN PENJUALAN</div><h1>Laporan Penjualan</h1><p>Ringkasan SKU terjual dan nilai aktual dari transaksi selesai, dikelompokkan sesuai diskon yang tercatat.</p></div>
+      <div><div class="eyebrow">LAPORAN PENJUALAN</div><h1>Laporan Penjualan</h1><p>Ringkasan penjualan dan lelang dari transaksi selesai, dengan nilai aktual per SKU.</p></div>
       <div class="header-btns"><button class="button secondary" id="exportSalesSkuCsv">⤓ <span>Ekspor CSV</span></button><button class="button primary" id="printSalesSkuPdf">Cetak / Simpan PDF</button></div>
     </div>
     <section class="panel">
@@ -368,9 +368,9 @@
         <div class="table-wrap"><table class="sales-daily-table"><thead><tr><th>TANGGAL (WIB)</th><th class="num">QTY TERJUAL</th><th class="num">TRANSAKSI LUNAS</th><th class="num">PENDAPATAN LUNAS</th><th class="num">PENDING</th><th class="num">PERLU VERIFIKASI</th></tr></thead><tbody id="skuReportDailyRows"><tr><td colspan="6" class="empty-row">Memuat ringkasan…</td></tr></tbody></table></div>
       </section>
       <div class="table-wrap sku-report-table-wrap"><table><thead><tr>
-        <th>SKU</th><th>DISKON TRANSAKSI</th><th class="num">HARGA SRP / UNIT</th><th class="num">QTY TERJUAL</th><th class="num">QTY STOK</th><th class="num">TOTAL HARGA SEBELUM DISKON</th><th class="num">TOTAL SETELAH DISKON 20%</th><th class="num">TOTAL SETELAH DISKON</th>
-      </tr></thead><tbody id="skuReportRows"><tr><td colspan="8" class="empty-row">Memuat laporan…</td></tr></tbody></table></div>
-      <div class="table-foot">Sumber laporan ditunjukkan pada ringkasan di atas. QTY terjual mengikuti rincian transaksi selesai; transaksi batal dikecualikan. QTY stok adalah saldo operasional terkini dari katalog aktif dan dapat berulang pada baris SKU yang memiliki kelompok diskon atau harga berbeda. Hanya kolom diskon yang tercatat pada transaksi yang diisi. Pendapatan harian hanya menjumlahkan transaksi lunas yang lolos pencocokan subtotal, diskon, total, dan rincian barang. Pembayaran menunggu serta transaksi yang perlu diverifikasi ditampilkan terpisah.</div>
+        <th>SKU</th><th>JENIS / DISKON</th><th class="num">HARGA SRP / UNIT</th><th class="num">QTY TERJUAL</th><th class="num">QTY STOK</th><th class="num">TOTAL HARGA SEBELUM DISKON</th><th class="num">NILAI AKTUAL PENJUALAN</th><th class="num">TOTAL SETELAH DISKON 20%</th><th class="num">TOTAL SETELAH DISKON 25%</th>
+      </tr></thead><tbody id="skuReportRows"><tr><td colspan="9" class="empty-row">Memuat laporan…</td></tr></tbody></table></div>
+      <div class="table-foot">Sumber laporan ditunjukkan pada ringkasan di atas. QTY terjual mengikuti rincian transaksi selesai; transaksi batal dikecualikan. Nilai aktual penjualan berasal dari total baris transaksi, termasuk lelang. Kolom total diskon 20% atau 25% hanya diisi untuk transaksi dengan diskon tersebut; nilai lelang ditandai Lelang dan ditampilkan pada kolom nilai aktual. QTY stok adalah saldo operasional terkini dari katalog aktif. Pendapatan harian hanya menjumlahkan transaksi lunas yang lolos pencocokan subtotal, diskon, total, dan rincian barang.</div>
     </section>
   </section>
 
@@ -857,6 +857,6 @@
 <div id="modalHost"></div>
 <div id="toast" class="toast"></div>
 
-  <script src="./app-v2.js?v=sales-report-audit-20261102-2"></script>
+  <script src="./app-v2.js?v=sales-report-auction-20261105-1"></script>
 </body>
 </html>

@@ -1031,7 +1031,7 @@ async function loadSalesSkuReport() {
   salesSkuReportSource = 'LOCAL';
   $('#skuReportRevenueTotal').textContent = 'Memuat…';
   $('#skuReportDailyRows').innerHTML = '<tr><td colspan="6" class="empty-row">Memuat ringkasan…</td></tr>';
-  $('#skuReportRows').innerHTML = '<tr><td colspan="8" class="empty-row">Memuat laporan…</td></tr>';
+  $('#skuReportRows').innerHTML = '<tr><td colspan="9" class="empty-row">Memuat laporan…</td></tr>';
   try {
     const report = await api('/api/sales/sku-report?' + params.toString());
     if (requestId !== salesSkuReportRequestId) return;
@@ -1053,13 +1053,14 @@ async function loadSalesSkuReport() {
       <td class="num">${day.unverified_transactions ? `<span class="report-unverified">${rupiah(day.unverified_amount)} · Perlu verifikasi (${Number(day.unverified_transactions).toLocaleString('id-ID')})</span>` : '—'}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-row">Tidak ada transaksi selesai pada periode ini.</td></tr>';
     $('#skuReportRows').innerHTML = report.items.length ? report.items.map(item => `
       <tr><td><b>${esc(item.sku)}</b></td>
-      <td>${item.discount_rate ? `Diskon ${Number(item.discount_rate)}%` : '<span class="muted">Tanpa diskon</span>'}</td>
+      <td>${item.sale_type === 'LELANG' ? `<b>Lelang</b>${item.needs_verification ? '<br><span class="report-unverified">Perlu verifikasi pembayaran</span>' : ''}` : item.discount_rate ? `Diskon ${Number(item.discount_rate)}%` : '<span class="muted">Tanpa diskon</span>'}</td>
       <td class="num">${item.srp == null ? '<span class="muted">Tidak tersedia</span>' : rupiah(item.srp)}</td>
       <td class="num">${Number(item.quantity).toLocaleString('id-ID')}</td>
       <td class="num">${item.stock_quantity == null ? '<span class="muted">Tidak tersedia</span>' : Number(item.stock_quantity).toLocaleString('id-ID')}</td>
       <td class="num">${item.before_total == null ? '<span class="muted">Tidak tersedia</span>' : rupiah(item.before_total)}</td>
+      <td class="num"><b>${item.actual_total == null ? '<span class="muted">Tidak tersedia</span>' : rupiah(item.actual_total)}</b></td>
       <td class="num">${item.discount20_total == null ? '—' : rupiah(item.discount20_total)}</td>
-      <td class="num">${item.discount25_total == null ? '—' : rupiah(item.discount25_total)}</td></tr>`).join('') : '<tr><td colspan="8" class="empty-row">Tidak ada SKU terjual pada filter ini.</td></tr>';
+      <td class="num">${item.discount25_total == null ? '—' : rupiah(item.discount25_total)}</td></tr>`).join('') : '<tr><td colspan="9" class="empty-row">Tidak ada SKU terjual pada filter ini.</td></tr>';
   } catch (error) {
     if (requestId !== salesSkuReportRequestId) return;
     salesSkuReportRows = [];
@@ -1069,7 +1070,7 @@ async function loadSalesSkuReport() {
     $('#skuReportMeta').textContent = 'Laporan gagal dimuat.';
     $('#skuReportRevenueTotal').textContent = 'Tidak tersedia';
     $('#skuReportDailyRows').innerHTML = `<tr><td colspan="6" class="empty-row">${esc(error.message)}</td></tr>`;
-    $('#skuReportRows').innerHTML = `<tr><td colspan="8" class="empty-row">${esc(error.message)}</td></tr>`;
+    $('#skuReportRows').innerHTML = `<tr><td colspan="9" class="empty-row">${esc(error.message)}</td></tr>`;
   }
 }
 $('#applySkuReport')?.addEventListener('click', loadSalesSkuReport);
@@ -1092,22 +1093,22 @@ function csvCell(value) {
   return '"' + text.replace(/"/g, '""') + '"';
 }
 $('#exportSalesSkuCsv')?.addEventListener('click', () => {
-  const columns = ['Jenis baris','Tanggal (WIB)','SKU','Diskon transaksi','Harga SRP/unit (Rp)','QTY terjual','QTY stok saat ini','Total SRP sebelum diskon (Rp)','Total aktual diskon 20% (Rp)','Total aktual diskon 25% (Rp)','Transaksi lunas','Pendapatan lunas (Rp)','Transaksi pending','Nominal pending (Rp)','Transaksi perlu verifikasi','Nominal perlu verifikasi (Rp)'];
+  const columns = ['Jenis baris','Tanggal (WIB)','SKU','Jenis / diskon transaksi','Harga SRP/unit (Rp)','QTY terjual','QTY stok saat ini','Total SRP sebelum diskon (Rp)','Nilai aktual penjualan (Rp)','Total aktual diskon 20% (Rp)','Total aktual diskon 25% (Rp)','Transaksi lunas','Pendapatan lunas (Rp)','Transaksi pending','Nominal pending (Rp)','Transaksi perlu verifikasi','Nominal perlu verifikasi (Rp)'];
   const blank = Array(columns.length).fill('');
   const csvRows = [columns];
   for (const day of salesSkuReportDaily) {
     const row = [...blank];
     row[0] = 'Pendapatan harian'; row[1] = day.day; row[5] = day.quantity;
-    row[10] = day.paid_transactions; row[11] = day.revenue;
-    row[12] = day.pending_transactions; row[13] = day.pending_amount;
-    row[14] = day.unverified_transactions; row[15] = day.unverified_amount;
+    row[11] = day.paid_transactions; row[12] = day.revenue;
+    row[13] = day.pending_transactions; row[14] = day.pending_amount;
+    row[15] = day.unverified_transactions; row[16] = day.unverified_amount;
     csvRows.push(row);
   }
   for (const item of salesSkuReportRows) {
     const row = [...blank];
-    row[0] = 'Rincian SKU'; row[2] = item.sku; row[3] = item.discount_rate ? `Diskon ${item.discount_rate}%` : 'Tanpa diskon';
+    row[0] = 'Rincian SKU'; row[2] = item.sku; row[3] = item.sale_type === 'LELANG' ? `Lelang${item.needs_verification ? ' · Perlu verifikasi pembayaran' : ''}` : item.discount_rate ? `Diskon ${item.discount_rate}%` : 'Tanpa diskon';
     row[4] = item.srp ?? ''; row[5] = item.quantity; row[6] = item.stock_quantity ?? '';
-    row[7] = item.before_total ?? ''; row[8] = item.discount20_total ?? ''; row[9] = item.discount25_total ?? '';
+    row[7] = item.before_total ?? ''; row[8] = item.actual_total ?? ''; row[9] = item.discount20_total ?? ''; row[10] = item.discount25_total ?? '';
     csvRows.push(row);
   }
   const csv = '\uFEFFsep=;\r\n' + csvRows.map(row => row.map(csvCell).join(';')).join('\r\n');
@@ -1124,10 +1125,11 @@ $('#printSalesSkuPdf')?.addEventListener('click', () => {
   const fromLabel = $('#skuReportFrom').value ? formatSalesReportDate($('#skuReportFrom').value) : 'awal';
   const toLabel = $('#skuReportTo').value ? formatSalesReportDate($('#skuReportTo').value) : ($('#skuReportFrom').value ? 'sekarang' : 'semua');
   const dataRows = salesSkuReportRows.map(row => `<tr>${[
-    row.sku, row.discount_rate ? `Diskon ${row.discount_rate}%` : 'Tanpa diskon',
+    row.sku, row.sale_type === 'LELANG' ? `Lelang${row.needs_verification ? ' · Perlu verifikasi pembayaran' : ''}` : row.discount_rate ? `Diskon ${row.discount_rate}%` : 'Tanpa diskon',
     row.srp == null ? 'Tidak tersedia' : rupiah(row.srp), Number(row.quantity).toLocaleString('id-ID'),
     row.stock_quantity == null ? 'Tidak tersedia' : Number(row.stock_quantity).toLocaleString('id-ID'),
     row.before_total == null ? 'Tidak tersedia' : rupiah(row.before_total),
+    row.actual_total == null ? 'Tidak tersedia' : rupiah(row.actual_total),
     row.discount20_total == null ? '—' : rupiah(row.discount20_total),
     row.discount25_total == null ? '—' : rupiah(row.discount25_total)
   ].map(value => `<td>${esc(value)}</td>`).join('')}</tr>`).join('');
@@ -1135,7 +1137,7 @@ $('#printSalesSkuPdf')?.addEventListener('click', () => {
     formatSalesReportDate(day.day), Number(day.quantity).toLocaleString('id-ID'), Number(day.paid_transactions).toLocaleString('id-ID'),
     rupiah(day.revenue), day.pending_transactions ? `${rupiah(day.pending_amount)} (${day.pending_transactions} transaksi)` : '—', day.unverified_transactions ? `${rupiah(day.unverified_amount)} · Perlu verifikasi (${day.unverified_transactions})` : '—'
   ].map(value => `<td>${esc(value)}</td>`).join('')}</tr>`).join('');
-  win.document.write(`<!doctype html><html lang="id"><meta charset="utf-8"><title>Laporan Penjualan Howell</title><style>@page{size:A4 landscape;margin:10mm}body{font:10px Arial;color:#102033}header{display:flex;justify-content:space-between;border-bottom:2px solid #102033;padding-bottom:8px;margin-bottom:12px}h1{font-size:18px;margin:0}h2{font-size:13px;margin:14px 0 6px}p{color:#596979}table{width:100%;border-collapse:collapse;font-size:8px}th{background:#edf2f7;text-align:left}td,th{border:1px solid #d9e1e8;padding:5px}tr{break-inside:avoid}.actions{margin:10px 0}@media print{.actions{display:none}}</style><header><div><h1>HOWELL OFFICIAL STORE</h1><p>Laporan Penjualan · ${esc(fromLabel)} s/d ${esc(toLabel)} WIB · sumber database ${salesSkuReportSource === 'VPS' ? 'VPS' : 'lokal'}</p><p>Pendapatan hanya menghitung transaksi lunas yang lolos pencocokan subtotal, diskon, total, dan rincian barang. Pembayaran menunggu serta data yang perlu verifikasi dipisahkan.</p></div><div>QTY ${Number(salesSkuReportSummary.quantity || 0).toLocaleString('id-ID')} · Pendapatan lunas ${rupiahBigInt(salesSkuReportDaily.reduce((sum,day)=>sum+BigInt(day.revenue||0),0n))}</div></header><div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><h2>Pendapatan per hari</h2><table><thead><tr>${['TANGGAL WIB','QTY TERJUAL','TRANSAKSI LUNAS','PENDAPATAN LUNAS','PENDING','PERLU VERIFIKASI'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dailyRows}</tbody></table><h2>Rincian SKU terjual dan stok operasional saat ini</h2><table><thead><tr>${['SKU','DISKON TRANSAKSI','HARGA SRP / UNIT','QTY TERJUAL','QTY STOK','TOTAL HARGA SEBELUM DISKON','TOTAL SETELAH DISKON 20%','TOTAL SETELAH DISKON'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dataRows}</tbody></table></html>`);
+  win.document.write(`<!doctype html><html lang="id"><meta charset="utf-8"><title>Laporan Penjualan Howell</title><style>@page{size:A4 landscape;margin:10mm}body{font:10px Arial;color:#102033}header{display:flex;justify-content:space-between;border-bottom:2px solid #102033;padding-bottom:8px;margin-bottom:12px}h1{font-size:18px;margin:0}h2{font-size:13px;margin:14px 0 6px}p{color:#596979}table{width:100%;border-collapse:collapse;font-size:8px}th{background:#edf2f7;text-align:left}td,th{border:1px solid #d9e1e8;padding:5px}tr{break-inside:avoid}.actions{margin:10px 0}@media print{.actions{display:none}}</style><header><div><h1>HOWELL OFFICIAL STORE</h1><p>Laporan Penjualan · ${esc(fromLabel)} s/d ${esc(toLabel)} WIB · sumber database ${salesSkuReportSource === 'VPS' ? 'VPS' : 'lokal'}</p><p>Nilai aktual mencakup penjualan dan lelang. Pembayaran menunggu serta data yang perlu verifikasi dipisahkan.</p></div><div>QTY ${Number(salesSkuReportSummary.quantity || 0).toLocaleString('id-ID')} · Pendapatan lunas ${rupiahBigInt(salesSkuReportDaily.reduce((sum,day)=>sum+BigInt(day.revenue||0),0n))}</div></header><div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><h2>Pendapatan per hari</h2><table><thead><tr>${['TANGGAL WIB','QTY TERJUAL','TRANSAKSI LUNAS','PENDAPATAN LUNAS','PENDING','PERLU VERIFIKASI'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dailyRows}</tbody></table><h2>Rincian SKU terjual dan stok operasional saat ini</h2><table><thead><tr>${['SKU','JENIS / DISKON','HARGA SRP / UNIT','QTY TERJUAL','QTY STOK','TOTAL HARGA SEBELUM DISKON','NILAI AKTUAL PENJUALAN','TOTAL SETELAH DISKON 20%','TOTAL SETELAH DISKON 25%'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dataRows}</tbody></table></html>`);
   win.document.close();
 });
 
