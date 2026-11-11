@@ -553,12 +553,13 @@ const linesStatement = db.prepare(\`
     AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
     AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
     AND (?='' OR s.cashier_id=?)
+    AND (?='' OR (?='TUNAI' AND s.payment_method='Tunai') OR (?='QRIS' AND s.payment_method='QRIS') OR (?='LAINNYA' AND s.payment_method NOT IN ('Tunai','QRIS')))
     AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
   GROUP BY si.sku,s.discount_rate,si.unit_price,sale_type
   ORDER BY si.sku COLLATE NOCASE,s.discount_rate,si.unit_price
 \`);
 linesStatement.setReadBigInts(true);
-const lines = linesStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId,input.q,input.q,input.q);
+const lines = linesStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId,input.paymentType,input.paymentType,input.paymentType,input.q,input.q,input.q);
 const safeNumber = (value, label) => {
   const integer = typeof value === 'bigint' ? value : BigInt(value || 0);
   if (integer < 0n || integer > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(label + ' exceeds the safe integer limit');
@@ -600,6 +601,7 @@ const dailyStatement = db.prepare(\`
       AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
       AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
       AND (?='' OR s.cashier_id=?)
+      AND (?='' OR (?='TUNAI' AND s.payment_method='Tunai') OR (?='QRIS' AND s.payment_method='QRIS') OR (?='LAINNYA' AND s.payment_method NOT IN ('Tunai','QRIS')))
   )
   SELECT day,
     SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
@@ -612,7 +614,7 @@ const dailyStatement = db.prepare(\`
   FROM scoped GROUP BY day ORDER BY day
 \`);
 dailyStatement.setReadBigInts(true);
-const dailyRows = dailyStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId);
+const dailyRows = dailyStatement.all(input.from,input.from,input.to,input.to,input.cashierId,input.cashierId,input.paymentType,input.paymentType,input.paymentType);
 const daily = dailyRows.map(row => ({
   day: row.day,
   paid_transactions: safeNumber(row.paid_transactions, 'Paid transaction count'),
@@ -1630,6 +1632,8 @@ const server = http.createServer(async (req, res) => {
         const from = url.searchParams.get('from') || '';
         const to = url.searchParams.get('to') || '';
         const q = (url.searchParams.get('q') || '').trim();
+        const paymentType = url.searchParams.get('payment_type') || '';
+        if (!['', 'TUNAI', 'QRIS', 'LAINNYA'].includes(paymentType)) return send(res, 400, { error: 'Filter metode pembayaran tidak valid.' });
         const cashierId = req.authUser.role === 'kasir' ? String(req.authUser.id) : (url.searchParams.get('cashier_id') || '');
         const validDate = value => {
           if (!value) return true;
@@ -1642,7 +1646,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (process.env.SALES_REPORT_SOURCE === 'vps') {
           try {
-            const report = await readVpsSalesSkuReport({ from, to, cashierId, q });
+            const report = await readVpsSalesSkuReport({ from, to, cashierId, q, paymentType });
             return send(res, 200, report);
           } catch (error) {
             return send(res, 503, { error: error.message || 'Laporan online VPS sementara tidak tersedia.' });
@@ -1665,12 +1669,13 @@ const server = http.createServer(async (req, res) => {
             AND (?='' OR date(s.sold_at, '+7 hours')>=date(?))
             AND (?='' OR date(s.sold_at, '+7 hours')<=date(?))
             AND (?='' OR s.cashier_id=?)
+            AND (?='' OR (?='TUNAI' AND s.payment_method='Tunai') OR (?='QRIS' AND s.payment_method='QRIS') OR (?='LAINNYA' AND s.payment_method NOT IN ('Tunai','QRIS')))
             AND (?='' OR lower(si.sku) LIKE '%'||lower(?)||'%' OR lower(si.name) LIKE '%'||lower(?)||'%')
           GROUP BY si.sku, s.discount_rate, si.unit_price, sale_type
           ORDER BY si.sku COLLATE NOCASE, s.discount_rate, si.unit_price
         `);
         lineStatement.setReadBigInts(true);
-        const lines = lineStatement.all(from, from, to, to, cashierId, cashierId, q, q, q);
+        const lines = lineStatement.all(from, from, to, to, cashierId, cashierId, paymentType, paymentType, paymentType, q, q, q);
         const safeNumber = (value, label) => {
           if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(`${label} melebihi batas Rupiah integer aman.`);
           return Number(value);
@@ -1714,6 +1719,7 @@ const server = http.createServer(async (req, res) => {
               AND (?='' OR date(s.sold_at,'+7 hours')>=date(?))
               AND (?='' OR date(s.sold_at,'+7 hours')<=date(?))
               AND (?='' OR s.cashier_id=?)
+              AND (?='' OR (?='TUNAI' AND s.payment_method='Tunai') OR (?='QRIS' AND s.payment_method='QRIS') OR (?='LAINNYA' AND s.payment_method NOT IN ('Tunai','QRIS')))
           )
           SELECT day,
             SUM(CASE WHEN payment_status='LUNAS' AND unverified=0 THEN 1 ELSE 0 END) paid_transactions,
@@ -1726,7 +1732,7 @@ const server = http.createServer(async (req, res) => {
           FROM scoped GROUP BY day ORDER BY day
         `);
         dailyStatement.setReadBigInts(true);
-        const daily = dailyStatement.all(from, from, to, to, cashierId, cashierId).map(row => ({
+        const daily = dailyStatement.all(from, from, to, to, cashierId, cashierId, paymentType, paymentType, paymentType).map(row => ({
           day: row.day,
           paid_transactions: safeNumber(BigInt(row.paid_transactions || 0), 'Transaksi lunas harian'),
           revenue: safeNumber(BigInt(row.revenue || 0), 'Pendapatan harian'),

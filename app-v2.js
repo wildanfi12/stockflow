@@ -1020,10 +1020,11 @@ async function loadSalesSkuReport() {
   const requestId = ++salesSkuReportRequestId;
   const params = new URLSearchParams();
   const from = $('#skuReportFrom')?.value || '', to = $('#skuReportTo')?.value || '';
-  const cashier = $('#skuReportCashier')?.value || '', q = $('#skuReportSearch')?.value.trim() || '';
+  const cashier = $('#skuReportCashier')?.value || '', paymentType = $('#skuReportPayment')?.value || '', q = $('#skuReportSearch')?.value.trim() || '';
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   if (cashier) params.set('cashier_id', cashier);
+  if (paymentType) params.set('payment_type', paymentType);
   if (q) params.set('q', q);
   salesSkuReportRows = [];
   salesSkuReportDaily = [];
@@ -1040,7 +1041,8 @@ async function loadSalesSkuReport() {
     salesSkuReportDaily = Array.isArray(report.daily) ? report.daily : [];
     salesSkuReportSource = report.source;
     updateSalesReportDayButtons();
-    $('#skuReportMeta').textContent = `${Number(report.summary.sku_count).toLocaleString('id-ID')} SKU terjual · ${Number(report.summary.row_count).toLocaleString('id-ID')} baris SKU/diskon/harga · QTY ${Number(report.summary.quantity).toLocaleString('id-ID')} · transaksi selesai · sumber ${report.source === 'VPS' ? 'online' : 'lokal'}${from || to ? ` · ${from ? formatSalesReportDate(from) : 'awal'} s/d ${to ? formatSalesReportDate(to) : 'sekarang'} WIB` : ' · semua periode'}`;
+    const paymentLabel = $('#skuReportPayment')?.selectedOptions[0]?.textContent || 'Semua Pembayaran';
+    $('#skuReportMeta').textContent = `${Number(report.summary.sku_count).toLocaleString('id-ID')} SKU terjual · ${Number(report.summary.row_count).toLocaleString('id-ID')} baris SKU/diskon/harga · QTY ${Number(report.summary.quantity).toLocaleString('id-ID')} · ${paymentLabel} · transaksi selesai · sumber ${report.source === 'VPS' ? 'online' : 'lokal'}${from || to ? ` · ${from ? formatSalesReportDate(from) : 'awal'} s/d ${to ? formatSalesReportDate(to) : 'sekarang'} WIB` : ' · semua periode'}`;
     $('#skuReportMissingPrice').textContent = report.summary.missing_srp_count ? `${report.summary.missing_srp_count} baris tidak memiliki SRP katalog.` : '';
     const revenueBig = salesSkuReportDaily.reduce((sum, day) => sum + BigInt(day.revenue || 0), 0n);
     $('#skuReportRevenueTotal').textContent = rupiahBigInt(revenueBig);
@@ -1075,6 +1077,7 @@ async function loadSalesSkuReport() {
 }
 $('#applySkuReport')?.addEventListener('click', loadSalesSkuReport);
 $('#skuReportCashier')?.addEventListener('change', loadSalesSkuReport);
+$('#skuReportPayment')?.addEventListener('change', loadSalesSkuReport);
 document.querySelectorAll('[data-sales-report-day]').forEach(button => button.addEventListener('click', () => {
   const date = button.dataset.salesReportDay;
   $('#skuReportFrom').value = date;
@@ -1093,6 +1096,8 @@ function csvCell(value) {
   return '"' + text.replace(/"/g, '""') + '"';
 }
 $('#exportSalesSkuCsv')?.addEventListener('click', () => {
+  const paymentValue = $('#skuReportPayment')?.value || '';
+  const paymentSlug = paymentValue === 'TUNAI' ? 'tunai' : paymentValue === 'QRIS' ? 'qris' : paymentValue === 'LAINNYA' ? 'lainnya' : 'semua-pembayaran';
   const columns = ['Jenis baris','Tanggal (WIB)','SKU','Jenis / diskon transaksi','Harga SRP/unit (Rp)','QTY terjual','QTY stok saat ini','Total SRP sebelum diskon (Rp)','Nilai aktual penjualan (Rp)','Total aktual diskon 20% (Rp)','Total aktual diskon 25% (Rp)','Transaksi lunas','Pendapatan lunas (Rp)','Transaksi pending','Nominal pending (Rp)','Transaksi perlu verifikasi','Nominal perlu verifikasi (Rp)'];
   const blank = Array(columns.length).fill('');
   const csvRows = [columns];
@@ -1114,7 +1119,7 @@ $('#exportSalesSkuCsv')?.addEventListener('click', () => {
   const csv = '\uFEFFsep=;\r\n' + csvRows.map(row => row.map(csvCell).join(';')).join('\r\n');
   const link = document.createElement('a');
   link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  link.download = 'laporan-penjualan.csv';
+  link.download = `laporan-penjualan-${paymentSlug}.csv`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 });
@@ -1124,6 +1129,7 @@ $('#printSalesSkuPdf')?.addEventListener('click', () => {
   if (!win) return notify('Izinkan pop-up browser untuk mencetak atau menyimpan PDF.');
   const fromLabel = $('#skuReportFrom').value ? formatSalesReportDate($('#skuReportFrom').value) : 'awal';
   const toLabel = $('#skuReportTo').value ? formatSalesReportDate($('#skuReportTo').value) : ($('#skuReportFrom').value ? 'sekarang' : 'semua');
+  const paymentLabel = $('#skuReportPayment')?.selectedOptions[0]?.textContent || 'Semua Pembayaran';
   const dataRows = salesSkuReportRows.map(row => `<tr>${[
     row.sku, row.sale_type === 'LELANG' ? `Lelang${row.needs_verification ? ' · Perlu verifikasi pembayaran' : ''}` : row.discount_rate ? `Diskon ${row.discount_rate}%` : 'Tanpa diskon',
     row.srp == null ? 'Tidak tersedia' : rupiah(row.srp), Number(row.quantity).toLocaleString('id-ID'),
@@ -1137,7 +1143,7 @@ $('#printSalesSkuPdf')?.addEventListener('click', () => {
     formatSalesReportDate(day.day), Number(day.quantity).toLocaleString('id-ID'), Number(day.paid_transactions).toLocaleString('id-ID'),
     rupiah(day.revenue), day.pending_transactions ? `${rupiah(day.pending_amount)} (${day.pending_transactions} transaksi)` : '—', day.unverified_transactions ? `${rupiah(day.unverified_amount)} · Perlu verifikasi (${day.unverified_transactions})` : '—'
   ].map(value => `<td>${esc(value)}</td>`).join('')}</tr>`).join('');
-  win.document.write(`<!doctype html><html lang="id"><meta charset="utf-8"><title>Laporan Penjualan Howell</title><style>@page{size:A4 landscape;margin:10mm}body{font:10px Arial;color:#102033}header{display:flex;justify-content:space-between;border-bottom:2px solid #102033;padding-bottom:8px;margin-bottom:12px}h1{font-size:18px;margin:0}h2{font-size:13px;margin:14px 0 6px}p{color:#596979}table{width:100%;border-collapse:collapse;font-size:8px}th{background:#edf2f7;text-align:left}td,th{border:1px solid #d9e1e8;padding:5px}tr{break-inside:avoid}.actions{margin:10px 0}@media print{.actions{display:none}}</style><header><div><h1>HOWELL OFFICIAL STORE</h1><p>Laporan Penjualan · ${esc(fromLabel)} s/d ${esc(toLabel)} WIB · sumber database ${salesSkuReportSource === 'VPS' ? 'VPS' : 'lokal'}</p><p>Nilai aktual mencakup penjualan dan lelang. Pembayaran menunggu serta data yang perlu verifikasi dipisahkan.</p></div><div>QTY ${Number(salesSkuReportSummary.quantity || 0).toLocaleString('id-ID')} · Pendapatan lunas ${rupiahBigInt(salesSkuReportDaily.reduce((sum,day)=>sum+BigInt(day.revenue||0),0n))}</div></header><div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><h2>Pendapatan per hari</h2><table><thead><tr>${['TANGGAL WIB','QTY TERJUAL','TRANSAKSI LUNAS','PENDAPATAN LUNAS','PENDING','PERLU VERIFIKASI'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dailyRows}</tbody></table><h2>Rincian SKU terjual dan stok operasional saat ini</h2><table><thead><tr>${['SKU','JENIS / DISKON','HARGA SRP / UNIT','QTY TERJUAL','QTY STOK','TOTAL HARGA SEBELUM DISKON','NILAI AKTUAL PENJUALAN','TOTAL SETELAH DISKON 20%','TOTAL SETELAH DISKON 25%'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dataRows}</tbody></table></html>`);
+  win.document.write(`<!doctype html><html lang="id"><meta charset="utf-8"><title>Laporan Penjualan Howell</title><style>@page{size:A4 landscape;margin:10mm}body{font:10px Arial;color:#102033}header{display:flex;justify-content:space-between;border-bottom:2px solid #102033;padding-bottom:8px;margin-bottom:12px}h1{font-size:18px;margin:0}h2{font-size:13px;margin:14px 0 6px}p{color:#596979}table{width:100%;border-collapse:collapse;font-size:8px}th{background:#edf2f7;text-align:left}td,th{border:1px solid #d9e1e8;padding:5px}tr{break-inside:avoid}.actions{margin:10px 0}@media print{.actions{display:none}}</style><header><div><h1>HOWELL OFFICIAL STORE</h1><p>Laporan Penjualan · ${esc(fromLabel)} s/d ${esc(toLabel)} WIB · metode pembayaran: ${esc(paymentLabel)} · sumber database ${salesSkuReportSource === 'VPS' ? 'VPS' : 'lokal'}</p><p>Nilai aktual mencakup penjualan dan lelang. Pembayaran menunggu serta data yang perlu verifikasi dipisahkan.</p></div><div>QTY ${Number(salesSkuReportSummary.quantity || 0).toLocaleString('id-ID')} · Pendapatan lunas ${rupiahBigInt(salesSkuReportDaily.reduce((sum,day)=>sum+BigInt(day.revenue||0),0n))}</div></header><div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><h2>Pendapatan per hari</h2><table><thead><tr>${['TANGGAL WIB','QTY TERJUAL','TRANSAKSI LUNAS','PENDAPATAN LUNAS','PENDING','PERLU VERIFIKASI'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dailyRows}</tbody></table><h2>Rincian SKU terjual dan stok operasional saat ini</h2><table><thead><tr>${['SKU','JENIS / DISKON','HARGA SRP / UNIT','QTY TERJUAL','QTY STOK','TOTAL HARGA SEBELUM DISKON','NILAI AKTUAL PENJUALAN','TOTAL SETELAH DISKON 20%','TOTAL SETELAH DISKON 25%'].map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${dataRows}</tbody></table></html>`);
   win.document.close();
 });
 
